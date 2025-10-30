@@ -1,0 +1,19 @@
+root:
+  rpy: [0, 0, 0]
+  xyz: [0, 0, 0]
+
+0:
+  rpy: &euler [0, 0, 0]
+  xyz: [0, 0, 0]
+
+1:
+  rpy: *euler
+  xyz: [0, 0, 0]
+
+2:
+  rpy: *euler
+  xyz: [0, 0, 0]
+
+3:
+  rpy: *euler
+  xyz: [0, 0, 0]

@@ -1,0 +1,72 @@
+<launch>
+
+	<!-- glob params -->
+	<arg name="use_markers_camera"  default="true" />
+	<arg name="markers_camera_name" default="markers_camera" />
+    <arg name="fps"                             default="30" />
+	<arg name="f_ctrl" default="5" /> 
+	<arg name="debug" default="false" /> 
+	<arg name="marker_poses_file" default="marker_holder_poses.yml" /> 
+	<arg name="err_term" default="2.0" />
+
+	<!-- detector params -->
+	<arg name="marker_length" default="0.01" />
+	<arg name="use_reconfigure" default="false" />
+	<arg name="filter" default="none" doc="Filter marker pose detections. One of ['none', 'mean', 'median', 'kalman_simple', 'kalman']"/>
+	<arg name="filter_iters" default="5" />
+	<arg name="vis" default="true" />
+
+	<!-- rs params -->
+	<arg name="serial_no"           default="822512060411"/>
+	<arg name="enable_depth"        default="false"/>
+	<arg name="depth_width"         default="1280"/>
+	<arg name="depth_height"        default="720"/>  
+	<arg name="depth_fps"             default="$(arg fps)"/>
+	<arg name="enable_color"        default="true"/>
+	<arg name="color_width"         default="1920"/>
+	<arg name="color_height"        default="1080"/>
+	<arg name="color_fps"           default="$(arg fps)"/>
+	<arg name="filters"                   default="colorizer"/>
+	<arg name="clip_distance"             default="-2"/>
+	<arg name="align_depth"               default="false"/>
+	<arg name="output"               default="log"/>
+
+	<!-- common manager -->
+	<node  if="$(arg use_markers_camera)" pkg="nodelet" type="nodelet" name="manager" args="manager" output="screen" required="true" />
+	<!-- markers cam -->
+	<include if="$(arg use_markers_camera)" file="$(find camera_pose)/launch/realsense.launch">
+		<arg name="external_manager"    value="true"/>
+		<arg name="manager"             value="/manager"/>
+		<arg name="use_realsense" value="$(arg use_markers_camera)" />
+		<arg name="camera"             value="$(arg markers_camera_name)" />
+		<arg name="serial_no"           value="$(arg serial_no)"/>
+		<arg name="enable_depth"        value="$(arg enable_depth)"/>
+		<arg name="depth_width"         value="$(arg depth_width)"/>
+		<arg name="depth_height"        value="$(arg depth_height)"/>  
+		<arg name="depth_fps"           value="$(arg depth_fps)"/>
+		<arg name="enable_color"        value="$(arg enable_color)"/>
+		<arg name="color_width"         value="$(arg color_width)"/>
+		<arg name="color_height"        value="$(arg color_height)"/>
+		<arg name="color_fps"           value="$(arg color_fps)"/>
+		<arg name="filters"                   value="$(arg filters)"/>
+		<arg name="clip_distance"             value="$(arg clip_distance)"/>
+		<arg name="align_depth"               value="$(arg align_depth)"/>
+	</include>
+
+	<!-- dataset collector script -->
+	<node pkg="camera_pose" name="dataset_collector" type="detect.py" output="screen" required="true">
+		<param name="markers_camera_name" value="$(arg markers_camera_name)/color" />
+		<param name="marker_poses_file" value="$(arg marker_poses_file)" /> 
+		<param name="use_reconfigure" value="$(arg use_reconfigure)" />
+		<param name="marker_length" value="$(arg marker_length)" />
+		<param name="vis" value="$(arg vis)" />
+		<param name="filter" value="$(arg filter)" />
+		<param name="filter_iters" value="$(arg filter_iters)" /> 
+		<param name="f_ctrl" value="$(arg f_ctrl)" />
+		<param name="debug" value="$(arg debug)" /> 
+		<param name="fps"     value="$(arg fps)" />
+		<param name="err_term" value="$(arg err_term)" />
+		<param name="camera_pose" value="true" />
+	</node>
+
+</launch>
