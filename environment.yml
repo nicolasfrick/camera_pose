@@ -1,0 +1,11 @@
+name: camera_pose_ros2
+channels:
+  - conda-forge
+dependencies:
+  - python>=3.10
+  - numpy
+  - opencv
+  - pip
+  - pip:
+      - dt-apriltags
+      - scipy
