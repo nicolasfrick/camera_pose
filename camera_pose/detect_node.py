@@ -1,27 +1,25 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 import os
 import cv2
 import yaml
-import rospy
-import cv_bridge
+import rclpy
 import numpy as np
-import sensor_msgs.msg
-import dynamic_reconfigure.server
 
+from rclpy.node import Node
+from cv_bridge import CvBridge
+from rcl_interfaces.msg import SetParametersResult
+from sensor_msgs.msg import Image, CameraInfo
+from ament_index_python.packages import get_package_share_directory
+from scipy.optimize import least_squares
 from typing import Optional, Any, Tuple, Union
 from scipy.spatial.transform import Rotation as R
-from scipy.optimize import least_squares
-from sensor_msgs.msg import Image
 
 from .util import *
 from .pose_filter import *
 from .marker_detector import AprilDetector
 
-from camera_pose.cfg import DetectorConfig
-
-
-class DetectBase():
+class DetectBase(Node):
 	"""
 		@param camera_ns Camera namespace preceding 'image_raw' and 'camera_info'
 		@type str
@@ -54,14 +52,14 @@ class DetectBase():
 	TXT_OFFSET = 30
 	
 	def __init__(self,
-			  	marker_length: float=0.010,
-				camera_ns: Optional[str]='',
-				vis: Optional[bool]=True,
+			  	# marker_length: float=0.010,
+				# camera_ns: Optional[str]='',
+				# vis: Optional[bool]=True,
 				cv_window:Optional[bool]=True,
 				use_reconfigure: Optional[bool]=False,
-				filter_type: Optional[str]='none',
-				filter_iters: Optional[int]=10,
-				f_ctrl: Optional[int]=30,
+				# filter_type: Optional[str]='none',
+				# filter_iters: Optional[int]=10,
+				# f_ctrl: Optional[int]=30,
 				test: Optional[bool]=False,
 				refine_pose: Optional[bool]=False,
 				flip_outliers: Optional[bool]=False,
@@ -69,6 +67,30 @@ class DetectBase():
 				use_tags: Optional[bool]=True,
 				) -> None:
 		
+		super().__init__('camera_pose')
+
+        # self.declare_parameter('camera_ns', '')
+
+        self.declare_parameter('markers_camera_name', '')
+        self.declare_parameter('marker_poses_file', 'marker_holder_poses.yml')
+        # self.declare_parameter('marker_length', 0.010)
+        # self.declare_parameter('vis', True)
+        # self.declare_parameter('filter', 'none')  # 'none' | 'median' | 'mean'
+        # self.declare_parameter('filter_iters', 10)
+        # self.declare_parameter('f_ctrl', 30.0)
+        self.declare_parameter('fps', 30.0)
+        self.declare_parameter('err_term', 2.0)
+        self.declare_parameter('refine_pose', False)
+        self.declare_parameter('flip_outliers', False)
+        self.declare_parameter('debug', False)
+
+        cam_ns = self.get_parameter('camera_ns').get_parameter_value().string_value
+        img_rel = self.get_parameter('image_topic').get_parameter_value().string_value
+        info_rel = self.get_parameter('camera_info_topic').get_parameter_value().string_value
+        self.image_topic = os.path.join('/', cam_ns, img_rel) if cam_ns else img_rel
+        self.camera_info_topic = os.path.join('/', cam_ns, info_rel) if cam_ns else info_rel
+
+
 		self.vis = vis
 		self.cv_window = cv_window and vis
 		self.test = test
@@ -80,14 +102,14 @@ class DetectBase():
 		self.frame_cnt = 0
 
 		# dummies
-		self.rgb_info= sensor_msgs.msg.CameraInfo()
+		self.rgb_info = CameraInfo()
 		self.rgb_info.K = np.array([1396.5938720703125, 0.0, 944.5514526367188, 0.0, 1395.5264892578125, 547.0949096679688, 0.0, 0.0, 1.0], dtype=np.float64)
 		self.rgb_info.D = np.array([0,0,0,0,0], dtype=np.float64)
-		self.img = cv2.imread(os.path.join(DATA_PTH, 'marker/imgs/test_img.jpg'), cv2.IMREAD_COLOR)
+		self.img = cv2.imread(os.path.join(get_package_share_directory('camera_pose'), 'marker/imgs/test_img.jpg'), cv2.IMREAD_COLOR)
 		# init ros
 		if not test:
 			self.img = None
-			self.bridge = cv_bridge.CvBridge()
+			self.bridge = CvBridge()
 			self.img_topic = camera_ns + '/image_raw'
 			rospy.loginfo("Waiting for camera_info from %s", camera_ns + '/camera_info')
 			self.rgb_info = rospy.wait_for_message(camera_ns + '/camera_info', sensor_msgs.msg.CameraInfo, 25)
@@ -106,11 +128,6 @@ class DetectBase():
 		if cv_window and use_tags:
 			cv2.namedWindow("Processed", cv2.WINDOW_NORMAL)
 			cv2.namedWindow("Detection", cv2.WINDOW_NORMAL)
-	
-		# init dynamic reconfigure
-		if use_reconfigure and use_tags:
-			print("Using reconfigure server")
-			self.det_config_server = dynamic_reconfigure.server.Server(DetectorConfig, self.det.setDetectorParams)
 
 	def flipOutliers(self, marker_detections: dict, tolerance: float=0.5, exclude_ids: list=[6,7,8,9], normal_type: NormalTypes=NormalTypes.XZ) -> bool:
 		"""Check if all Z axes are oriented similarly and 
@@ -198,7 +215,7 @@ class DetectBase():
 		# align rotations by consens
 		if self.flip_outliers:
 			if not self.flipOutliers(marker_det):
-				beep()
+				pass
 		# improve detection
 		if self.refine_pose:
 			self.refineDetection(marker_det)
@@ -574,3 +591,114 @@ def main() -> None:
 		
 if __name__ == "__main__":
 	main()
+
+
+
+class CameraPoseNode(Node):
+    def __init__(self):
+        super().__init__('camera_pose')
+        # Parameters (ROS 2 style)
+        self.declare_parameter('camera_ns', '')
+        self.declare_parameter('image_topic', 'image_raw')
+        self.declare_parameter('camera_info_topic', 'camera_info')
+        self.declare_parameter('markers_camera_name', '')
+        self.declare_parameter('marker_poses_file', 'marker_holder_poses.yml')
+        self.declare_parameter('marker_length', 0.010)
+        self.declare_parameter('vis', True)
+        self.declare_parameter('filter', 'none')  # 'none' | 'median' | 'mean'
+        self.declare_parameter('filter_iters', 10)
+        self.declare_parameter('f_ctrl', 30.0)
+        self.declare_parameter('fps', 30.0)
+        self.declare_parameter('err_term', 2.0)
+        self.declare_parameter('refine_pose', False)
+        self.declare_parameter('flip_outliers', False)
+        self.declare_parameter('debug', False)
+
+        self.add_on_set_parameters_callback(self._on_param_update)
+
+        # Resolve topics
+        cam_ns = self.get_parameter('camera_ns').get_parameter_value().string_value
+        img_rel = self.get_parameter('image_topic').get_parameter_value().string_value
+        info_rel = self.get_parameter('camera_info_topic').get_parameter_value().string_value
+        self.image_topic = os.path.join('/', cam_ns, img_rel) if cam_ns else img_rel
+        self.camera_info_topic = os.path.join('/', cam_ns, info_rel) if cam_ns else info_rel
+
+        # Bridge and state
+        self.bridge = CvBridge()
+        self.det = MarkerDetector(self.get_parameter('marker_length').get_parameter_value().double_value)
+        self.pose_filter = self._make_filter()
+
+        # Load camera intrinsics once
+        self.camera_matrix = None
+        self.dist_coeffs = None
+
+        # Subscriptions
+        self.sub_img = self.create_subscription(Image, self.image_topic, self._on_image, 10)
+        # We'll latch camera info when first received
+        self.sub_info = self.create_subscription(CameraInfo, self.camera_info_topic, self._on_info, 10)
+
+        # Timer for logging frequency
+        self.dt = 1.0 / self.get_parameter('fps').value
+        self.timer = self.create_timer(self.dt, lambda: None)  # keep node alive
+
+        self.get_logger().info(f"Listening to: {self.image_topic} and {self.camera_info_topic}")
+
+    def _on_param_update(self, params):
+        for p in params:
+            if p.name in ('filter', 'filter_iters', 'f_ctrl'):
+                self.pose_filter = self._make_filter()
+        return SetParametersResult(successful=True)
+
+    def _make_filter(self):
+        ftype = self.get_parameter('filter').get_parameter_value().string_value
+        iters = int(self.get_parameter('filter_iters').get_parameter_value().integer_value or 10)
+        fctrl = float(self.get_parameter('f_ctrl').get_parameter_value().double_value or 30.0)
+        if ftype == 'median':
+            return PoseFilterMedian(iters, fctrl)
+        elif ftype == 'mean':
+            return PoseFilterMean((0,0,0,0,0,0))
+        else:
+            return PoseFilterNoop()
+
+    def _on_info(self, msg: CameraInfo):
+        if self.camera_matrix is None:
+            K = np.array(msg.k, dtype=np.float32).reshape(3,3)
+            D = np.array(msg.d, dtype=np.float32)
+            self.camera_matrix = K
+            self.dist_coeffs = D
+            self.get_logger().info("Camera intrinsics received.")
+
+    def _on_image(self, msg: Image):
+        if self.camera_matrix is None:
+            # Wait for camera info first
+            return
+        try:
+            frame = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+        except Exception as e:
+            self.get_logger().error(f"cv_bridge conversion failed: {e}")
+            return
+
+        # Detect markers and estimate pose(s)
+        res = self.det.detect_and_estimate(frame, self.camera_matrix, self.dist_coeffs,
+                                           refine=self.get_parameter('refine_pose').value,
+                                           flip_outliers=self.get_parameter('flip_outliers').value)
+        # Optionally visualize
+        if self.get_parameter('vis').value:
+            vis = self.det.draw_detections(frame.copy())
+            try:
+                cv2.imshow('camera_pose', vis)
+                cv2.waitKey(1)
+            except Exception:
+                pass
+
+def main():
+    rclpy.init()
+    node = CameraPoseNode()
+    try:
+        rclpy.spin(node)
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()
