@@ -2,7 +2,6 @@
 
 from launch_ros.actions import Node
 from launch import LaunchDescription
-from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.actions import DeclareLaunchArgument, OpaqueFunction, IncludeLaunchDescription
@@ -11,37 +10,43 @@ from ament_index_python.packages import get_package_share_directory
 def launch_setup(context, *args, **kwargs):
 	start_setup = []
 
-	use_markers_camera = LaunchConfiguration('use_markers_camera', default='true')
+	markers_camera_name = LaunchConfiguration('markers_camera_name', default='').perform(context)
 	
-	start_setup.append( 
-		IncludeLaunchDescription(
-			PythonLaunchDescriptionSource([
-				get_package_share_directory('realsense2_camera'),
-				'/launch/rs_launch.py'
-			]),
-			condition=IfCondition(use_markers_camera),
-            launch_arguments={'camera': LaunchConfiguration('camera'),
-							  'serial_no': LaunchConfiguration('serial_no'),
-							  'publish_tf': LaunchConfiguration('publish_tf'),
-							  'enable_color': LaunchConfiguration('enable_color'),
-							  'enable_depth': LaunchConfiguration('enable_depth'),
-							  'enable_rgbd': LaunchConfiguration('enable_rgbd'),
-							  'enable_infra': LaunchConfiguration('enable_infra'),
-							  'enable_gyro': LaunchConfiguration('enable_gyro'),
-							  'enable_sync': LaunchConfiguration('enable_sync'),
-							  'pointcloud.enable': LaunchConfiguration('enable_pointcloud'),
-							  'align_depth.enable': LaunchConfiguration('align_depth'),
-							  'depth_module.depth_profile': f"{LaunchConfiguration('depth_width')}x{LaunchConfiguration('depth_height')}x{LaunchConfiguration('depth_fps')}",
-							  'depth_module.inter_cam_sync_mode': LaunchConfiguration('depth_inter_cam_sync_mode'),
-							  'rgb_camera.color_profile': f"{LaunchConfiguration('color_width')}x{LaunchConfiguration('color_height')}x{LaunchConfiguration('color_fps')}",
-							  'depth_module.enable_auto_exposure': LaunchConfiguration('enable_depth_auto_exposure'),
-							  'rgb_camera.enable_auto_exposure': LaunchConfiguration('enable_color_auto_exposure'),
-							  'filters': LaunchConfiguration('filters'),
-							  'clip_distance': LaunchConfiguration('clip_distance'),
-            				}.items()
+	if markers_camera_name != "":
+		depth_profile = f"{LaunchConfiguration('depth_width').perform(context)}x{LaunchConfiguration('depth_height').perform(context)}x{LaunchConfiguration('depth_fps').perform(context)}"
+		color_profile = f"{LaunchConfiguration('color_width').perform(context)}x{LaunchConfiguration('color_height').perform(context)}x{LaunchConfiguration('color_fps').perform(context)}"
+		
+		start_setup.append( 
+			IncludeLaunchDescription(
+				PythonLaunchDescriptionSource([
+					get_package_share_directory('realsense2_camera'),
+					'/launch/rs_launch.py'
+				]),
+				launch_arguments={'camera': markers_camera_name,
+								'serial_no': LaunchConfiguration('serial_no'),
+								'publish_tf': LaunchConfiguration('publish_tf'),
+								'enable_color': LaunchConfiguration('enable_color'),
+								'enable_depth': LaunchConfiguration('enable_depth'),
+								'enable_rgbd': LaunchConfiguration('enable_rgbd'),
+								'enable_infra': LaunchConfiguration('enable_infra'),
+								'enable_gyro': LaunchConfiguration('enable_gyro'),
+								'enable_sync': LaunchConfiguration('enable_sync'),
+								'pointcloud.enable': LaunchConfiguration('enable_pointcloud'),
+								'align_depth.enable': LaunchConfiguration('align_depth'),
+								'depth_module.depth_profile': depth_profile,
+								'depth_module.inter_cam_sync_mode': LaunchConfiguration('depth_inter_cam_sync_mode'),
+								'rgb_camera.color_profile': color_profile,
+								'depth_module.enable_auto_exposure': LaunchConfiguration('enable_depth_auto_exposure'),
+								'rgb_camera.enable_auto_exposure': LaunchConfiguration('enable_color_auto_exposure'),
+								'filters': LaunchConfiguration('filters'),
+								'clip_distance': LaunchConfiguration('clip_distance'),
+								}.items()
+			)
 		)
-	)
 
+	image_topic = LaunchConfiguration('image_topic').perform(context) if not markers_camera_name else f'/{markers_camera_name}/camera/color/image_raw'
+	camera_info_topic = LaunchConfiguration('camera_info_topic').perform(context) if not markers_camera_name else f'/{markers_camera_name}/camera/color/camera_info'
+	
 	start_setup.append(
 		Node(
 			package='camera_pose',
@@ -49,19 +54,27 @@ def launch_setup(context, *args, **kwargs):
 			name='camera_pose',
 			namespace='',
 			parameters=[{
-				'markers_camera_name': LaunchConfiguration('markers_camera_name'),
+				'camera_ns': LaunchConfiguration('camera_ns'),
+				'image_topic': image_topic,
+				'camera_info_topic': camera_info_topic,
 				'marker_poses_file': LaunchConfiguration('marker_poses_file'),
+				'camera_pose_file': LaunchConfiguration('camera_pose_file'),
 				'use_reconfigure': LaunchConfiguration('use_reconfigure'),
 				'marker_length': LaunchConfiguration('marker_length'),
 				'vis': LaunchConfiguration('vis'),
-				'filter': LaunchConfiguration('filter'),
+				'test': LaunchConfiguration('test'),
+				'use_tags': LaunchConfiguration('use_tags'),
+				'cv_window': LaunchConfiguration('cv_window'),
+				'refine_pose': LaunchConfiguration('refine_pose'),
+				'flip_outliers': LaunchConfiguration('flip_outliers'),
+				'filter_type': LaunchConfiguration('filter_type'),
 				'filter_iters': LaunchConfiguration('filter_iters'),
 				'f_ctrl': LaunchConfiguration('f_ctrl'),
 				'debug': LaunchConfiguration('debug'),
 				'fps': LaunchConfiguration('fps'),
 				'err_term': LaunchConfiguration('err_term'),
-				'camera_pose': 'true',
 			}],
+			arguments=['camera_pose'],
 			output='screen',
 		),
 	)
@@ -72,13 +85,23 @@ def generate_launch_description():
 
 	return LaunchDescription([
 			DeclareLaunchArgument(
-				"use_markers_camera",
-				default_value="true",
+				"markers_camera_name",
+				default_value="",
 				description=''
 			),
 			DeclareLaunchArgument(
-				"markers_camera_name",
-				default_value="markers_camera",
+				"image_topic",
+				default_value="/image_raw",
+				description=''
+			),
+			DeclareLaunchArgument(
+				"camera_info_topic",
+				default_value="/camera_info",
+				description=''
+			),
+			DeclareLaunchArgument(
+				"camera_ns",
+				default_value="",
 				description=''
 			),
 			DeclareLaunchArgument(
@@ -97,8 +120,38 @@ def generate_launch_description():
 				description=''
 			), 
 			DeclareLaunchArgument(
+				"test",
+				default_value="false",
+				description=''
+			), 
+			DeclareLaunchArgument(
+				"cv_window",
+				default_value="false",
+				description=''
+			), 
+			DeclareLaunchArgument(
+				"refine_pose",
+				default_value="false",
+				description=''
+			), 
+			DeclareLaunchArgument(
+				"flip_outliers",
+				default_value="false",
+				description=''
+			), 
+			DeclareLaunchArgument(
+				"use_tags",
+				default_value="true",
+				description=''
+			), 
+			DeclareLaunchArgument(
 				"marker_poses_file",
-				default_value="marker_holder_poses.yml",
+				default_value="marker_poses.yaml",
+				description=''
+			) ,
+			DeclareLaunchArgument(
+				"camera_pose_file",
+				default_value="camera_pose.yaml",
 				description=''
 			) ,
 			DeclareLaunchArgument(
@@ -118,7 +171,7 @@ def generate_launch_description():
 				description=''
 			),
 			DeclareLaunchArgument(
-				"filter",
+				"filter_type",
 				default_value="none",
 				description="Filter marker pose detections.",
 				choices=['none', 'mean', 'median', 'kalman_simple', 'kalman'],

@@ -1,3 +1,2 @@
-marker_camera_optical_frame: 
-  xyz: [0,0,0]
-  rpy: [0,0,0] 
+xyz: null
+rpy: null
