@@ -98,7 +98,7 @@ class DetectBase(Node):
 		self.rgb_info = CameraInfo()
 		self.rgb_info.k = [1396.5938720703125, 0.0, 944.5514526367188, 0.0, 1395.5264892578125, 547.0949096679688, 0.0, 0.0, 1.0]
 		self.rgb_info.d = [0.0, 0.0, 0.0, 0.0, 0.0]
-		self.img = cv2.imread(os.path.join(self.pwd, 'marker/imgs/test_img.jpg'), cv2.IMREAD_COLOR, )
+		self.img = cv2.imread(os.path.join(self.pwd, 'images/test_img.jpg'), cv2.IMREAD_COLOR)
 
 		# init ros
 		if not self.test:
@@ -132,6 +132,8 @@ class DetectBase(Node):
 				self.raw_image_pub = self.create_publisher(Image, 'camera_pose_raw', 10)
 				self.proc_image_pub = self.create_publisher(Image, 'camera_pose_processed', 10)
 				self.det_image_pub = self.create_publisher(Image, 'camera_pose_detections', 10)
+				self.raw_encoding = 'rgb8' if self.test else 'bgr8'
+				self.proc_encoding = 'mono8'
 
 		# executor
 		self.timer = self.create_timer(1/self.f_loop, self.run)
@@ -225,7 +227,7 @@ class DetectBase(Node):
 				# real image
 				self.get_logger().debug("Waiting for image message {}".format(self.frame_cnt))
 				rgb = wait_for_message(msg_type=Image, topic=self.image_topic, node=self, time_to_wait=5)
-				raw_img = self.bridge.imgmsg_to_cv2(rgb, 'bgr8')
+				raw_img = self.bridge.imgmsg_to_cv2(rgb, self.raw_encoding)
 
 			if raw_img is not None:
 				self.get_logger().debug("Processing frame {}".format(self.frame_cnt))
@@ -256,11 +258,11 @@ class DetectBase(Node):
 				rclpy.shutdown()
 		else:
 			if raw_img is not None:
-				self.raw_image_pub.publish(self.bridge.cv2_to_imgmsg(raw_img, 'bgr8'))
+				self.raw_image_pub.publish(self.bridge.cv2_to_imgmsg(raw_img, self.raw_encoding))
 			if proc_img is not None:
-				self.proc_image_pub.publish(self.bridge.cv2_to_imgmsg(proc_img, 'bgr8'))
+				self.proc_image_pub.publish(self.bridge.cv2_to_imgmsg(proc_img, self.proc_encoding))
 			if det_img is not None:
-				self.det_image_pub.publish(self.bridge.cv2_to_imgmsg(det_img, 'bgr8'))
+				self.det_image_pub.publish(self.bridge.cv2_to_imgmsg(det_img, self.raw_encoding))
 
 	def run(self) -> None:
 		try:

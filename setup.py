@@ -11,7 +11,7 @@ setup(
         ('share/' + package_name, ['package.xml']),
         ('share/' + package_name + '/launch', ['launch/cam_pose.launch.py']),
         ('share/' + package_name + '/config', ['config/camera_pose.yaml', 'config/detector_params.yaml', 'config/marker_poses.yaml']),
-        ('share/' + package_name + '/marker/imgs', ['marker/imgs/test_img.jpg']),
+        ('share/' + package_name + '/images', ['images/test_img.jpg']),
     ],
     install_requires=['setuptools'],
     zip_safe=True,

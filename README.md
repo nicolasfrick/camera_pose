@@ -53,3 +53,8 @@ $ cd $HOME/camera_ws
 $ source install/setup.bash
 $ ros2 launch camera_pose cam_pose.launch.py
 ```
+
+## ToDo
+
+EKF filter implementation
+RANSAC implementation 
