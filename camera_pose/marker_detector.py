@@ -11,8 +11,8 @@ import dt_apriltags as apl
 from threading import Lock
 from typing import Optional, Tuple, Any, Callable
 
-from pose_filter import *
-from util import *
+from .pose_filter import *
+from .util import *
 
 @dataclasses.dataclass(eq=False)
 class KfParams():
@@ -72,13 +72,18 @@ class MarkerDetectorBase():
 				 print_stats: Optional[bool]=True,
 				 invert_pose: Optional[bool]=False,
 				 filter_type: Optional[Union[FilterTypes, str]]=FilterTypes.NONE,
+				 pwd: Optional[Union[str,None]]=None,
 				 ) -> None:
 		
 		# params
+		self.pwd = pwd
 		self.params_lock = Lock()
 		self.params = ReconfParams()		
+		
 		# initialize params
-		fl = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cfg/detector_params.yaml")
+		fl = "config/detector_params.yaml"
+		if self.pwd is not None:
+			fl = os.path.join(self.pwd, fl)
 		with open(fl, 'r') as fr:
 			self.params_config = yaml.safe_load(fr)
 		for _, v in self.params_config.items():
@@ -193,7 +198,7 @@ class MarkerDetectorBase():
 	def _printSettings(self) -> None:
 		raise NotImplementedError
 	
-	def _detectionRoutine(self):
+	def _detectionRoutine(self, img: cv2.typing.MatLike, gray: cv2.typing.MatLike, vis: bool=True)  -> Tuple[dict, cv2.typing.MatLike, cv2.typing.MatLike]:
 		raise NotImplementedError
 		
 	def detMarkerPoses(self, img: cv2.typing.MatLike, subroutine: Callable[[cv2.typing.MatLike, cv2.typing.MatLike], Tuple[dict, cv2.typing.MatLike, cv2.typing.MatLike]], vis: bool=True) -> Tuple[dict, cv2.typing.MatLike, cv2.typing.MatLike]:	
@@ -208,7 +213,7 @@ class MarkerDetectorBase():
 			#  image denoising using Non-local Means Denoising algorithm
 			if self.params.denoise:
 				gray = cv2.fastNlMeansDenoising(gray, None, self.params.h, self.params.templateWindowSize, self.params.searchWindowSize)
-
+			
 			(marker_poses, out_img, gray) = subroutine(img, gray, vis)
 
 			if vis:
@@ -241,42 +246,44 @@ class AprilDetector(MarkerDetectorBase):
 				We recommend 5 to avoid some of the detection pitfalls mentioned above.
 	"""
 	def __init__(self,
-			  				K: Tuple,
-							D: Tuple,
-							marker_length: float,
-							dt: Optional[float]=0.1,
-							bbox: Optional[Tuple]=None,
-							print_stats: Optional[bool]=True,
-							invert_pose: Optional[bool]=False,
-							filter_type: Optional[Union[FilterTypes, str]]=FilterTypes.NONE,
-							marker_family: Optional[str]='tag16h5',
-							debug: Optional[bool]=False,
-							) -> None:
+			  	 K: Tuple,
+				 D: Tuple,
+				 marker_length: float,
+				 dt: Optional[float]=0.1,
+				 bbox: Optional[Tuple]=None,
+				 print_stats: Optional[bool]=True,
+				 invert_pose: Optional[bool]=False,
+				 filter_type: Optional[Union[FilterTypes, str]]=FilterTypes.NONE,
+				 marker_family: Optional[str]='tag16h5',
+				 debug: Optional[bool]=False,
+				 pwd: Optional[str]=os.path.dirname(os.path.abspath(__file__)),
+				 ) -> None:
 		
 		super().__init__(K=K, 
-				   						D=D, 
-										marker_length=marker_length, 
-										dt=dt, 
-										bbox=bbox, 
-										invert_pose=invert_pose,
-										print_stats=print_stats, 
-										filter_type=filter_type,
-										)
+				   	     D=D, 
+					     marker_length=marker_length, 
+					     dt=dt, 
+					     bbox=bbox, 
+					     invert_pose=invert_pose,
+					     print_stats=print_stats, 
+					     filter_type=filter_type,
+						 pwd=pwd,
+					     )
 		self.det = apl.Detector(families=marker_family, 
-													nthreads=self.params.nthreads,
-													quad_decimate=self.params.quad_decimate,   
-													quad_sigma=self.params.quad_sigma,
-													refine_edges=self.params.refine_edges, 
-													decode_sharpening=self.params.decode_sharpening,
-													debug=False,
-													)
+								nthreads=self.params.nthreads,
+								quad_decimate=self.params.quad_decimate,   
+								quad_sigma=self.params.quad_sigma,
+								refine_edges=self.params.refine_edges, 
+								decode_sharpening=self.params.decode_sharpening,
+								debug=False,
+								)
 		self.debug = debug
 		self.params_change = False
 		self.camera_params = (K[0], K[4], K[2], K[5])
 		self._printSettings()
 
 	def _printSettings(self) -> None:
-		txt =   f"Running Apriltag Detector with settings:\n"
+		txt =  f"Running Apriltag Detector with settings:\n"
 		txt += f"Camera params fx: {self.camera_params[0]}, fy: {self.camera_params[1]}, cx: {self.camera_params[2]}, cy: {self.camera_params[3]}\n"
 		txt += f"Distorsion: {self.dist}\n"
 		txt += f"print_stats: {self.print_stats},\n"
@@ -356,10 +363,10 @@ class AprilDetector(MarkerDetectorBase):
 
 		return marker_poses, img, gray
 
-	def detMarkerPoses(self, img: np.ndarray, vis: bool=True) -> Tuple[dict, np.ndarray]:
+	def detMarkerPoses(self, img: np.ndarray, subroutine: Callable[[cv2.typing.MatLike, cv2.typing.MatLike], Tuple[dict, cv2.typing.MatLike, cv2.typing.MatLike]]=None, vis: bool=True, ) -> Tuple[dict, cv2.typing.MatLike, cv2.typing.MatLike]:	
 		"""Detect Apriltag marker in bgr image.
 			@param img Input image with 'bgr' encoding
 			@type np.ndarray
 			@return Detected marker poses, marker detection image, processed image
 		"""
-		return super().detMarkerPoses(img, self._detectionRoutine, vis)
+		return super().detMarkerPoses(img, self._detectionRoutine if subroutine is None else subroutine, vis)

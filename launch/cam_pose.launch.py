@@ -10,6 +10,8 @@ from ament_index_python.packages import get_package_share_directory
 def launch_setup(context, *args, **kwargs):
 	start_setup = []
 
+	debug = LaunchConfiguration('debug').perform(context).lower() == 'true'
+	debug_vis = LaunchConfiguration('debug_vis').perform(context).lower() == 'true'
 	markers_camera_name = LaunchConfiguration('markers_camera_name', default='').perform(context)
 	
 	if markers_camera_name != "":
@@ -63,18 +65,18 @@ def launch_setup(context, *args, **kwargs):
 				'marker_length': LaunchConfiguration('marker_length'),
 				'vis': LaunchConfiguration('vis'),
 				'test': LaunchConfiguration('test'),
-				'use_tags': LaunchConfiguration('use_tags'),
 				'cv_window': LaunchConfiguration('cv_window'),
 				'refine_pose': LaunchConfiguration('refine_pose'),
 				'flip_outliers': LaunchConfiguration('flip_outliers'),
 				'filter_type': LaunchConfiguration('filter_type'),
 				'filter_iters': LaunchConfiguration('filter_iters'),
 				'f_ctrl': LaunchConfiguration('f_ctrl'),
-				'debug': LaunchConfiguration('debug'),
+				'debug': debug,
 				'fps': LaunchConfiguration('fps'),
 				'err_term': LaunchConfiguration('err_term'),
 			}],
-			arguments=['camera_pose'],
+			arguments=['camera_pose' if not debug_vis else ''],
+			ros_arguments=['--log-level', 'debug' if debug else 'info'],
 			output='screen',
 		),
 	)
@@ -91,12 +93,12 @@ def generate_launch_description():
 			),
 			DeclareLaunchArgument(
 				"image_topic",
-				default_value="/image_raw",
+				default_value="image_raw",
 				description=''
 			),
 			DeclareLaunchArgument(
 				"camera_info_topic",
-				default_value="/camera_info",
+				default_value="camera_info",
 				description=''
 			),
 			DeclareLaunchArgument(
@@ -106,16 +108,21 @@ def generate_launch_description():
 			),
 			DeclareLaunchArgument(
 				"fps",
-				default_value="30",
+				default_value="30.0",
 				description=''
 			),
 			DeclareLaunchArgument(
 				"f_ctrl",
-				default_value="5",
+				default_value="10.0",
 				description=''
 			) ,
 			DeclareLaunchArgument(
 				"debug",
+				default_value="false",
+				description=''
+			), 
+			DeclareLaunchArgument(
+				"debug_vis",
 				default_value="false",
 				description=''
 			), 
@@ -140,18 +147,13 @@ def generate_launch_description():
 				description=''
 			), 
 			DeclareLaunchArgument(
-				"use_tags",
-				default_value="true",
-				description=''
-			), 
-			DeclareLaunchArgument(
 				"marker_poses_file",
-				default_value="marker_poses.yaml",
+				default_value="",
 				description=''
 			) ,
 			DeclareLaunchArgument(
 				"camera_pose_file",
-				default_value="camera_pose.yaml",
+				default_value="",
 				description=''
 			) ,
 			DeclareLaunchArgument(
@@ -209,7 +211,7 @@ def generate_launch_description():
 			) , 
 			DeclareLaunchArgument(
 				"depth_fps",
-				default_value="30",
+				default_value="30.0",
 				description=''
 			),
 			DeclareLaunchArgument(
@@ -229,7 +231,7 @@ def generate_launch_description():
 			),
 			DeclareLaunchArgument(
 				"color_fps",
-				default_value="30",
+				default_value="30.0",
 				description=''
 			),
 			DeclareLaunchArgument(

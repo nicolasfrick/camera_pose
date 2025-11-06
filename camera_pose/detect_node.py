@@ -41,8 +41,6 @@ class DetectBase(Node):
 		@type float
 		@param cv_window
 		@type bool
-		@param use_tags
-		@type bool
 
 	"""
 
@@ -61,7 +59,7 @@ class DetectBase(Node):
 		
 		self.declare_parameter('vis', True)
 		self.declare_parameter('test', False)
-		self.declare_parameter('use_tags', True)
+		self.declare_parameter('debug', False)
 		self.declare_parameter('cv_window', False)
 		self.declare_parameter('refine_pose', False)
 		self.declare_parameter('flip_outliers', False)
@@ -73,16 +71,17 @@ class DetectBase(Node):
 		self.declare_parameter('marker_length', 0.010)
 		self.declare_parameter('filter_type', 'none')  # 'none' | 'median' | 'mean'
 
-		self.camera_ns = '/' + self.get_parameter('camera_ns').get_parameter_value().string_value.lstrip('/')
+		self.camera_ns = self.get_parameter('camera_ns').get_parameter_value().string_value.lstrip('/')
+		self.camera_ns = '/' + self.camera_ns if self.camera_ns else ''
 		self.image_topic = self.camera_ns + '/' + self.get_parameter('image_topic').get_parameter_value().string_value.lstrip('/')
 		self.camera_info_topic = self.camera_ns + '/' + self.get_parameter('camera_info_topic').get_parameter_value().string_value.lstrip('/')
-		
+
 		self.vis = self.get_parameter('vis').get_parameter_value().bool_value
 		self.test = self.get_parameter('test').get_parameter_value().bool_value
 		self.cv_window = self.get_parameter('cv_window').get_parameter_value().bool_value and self.vis
-		self.use_tags = self.get_parameter('use_tags').get_parameter_value().bool_value
 		self.refine_pose = self.get_parameter('refine_pose').get_parameter_value().bool_value
 		self.flip_outliers = self.get_parameter('flip_outliers').get_parameter_value().bool_value
+		self.debug = self.get_parameter('debug').get_parameter_value().bool_value
 
 		self.fps = self.get_parameter('fps').get_parameter_value().double_value
 		self.f_loop = self.get_parameter('f_ctrl').get_parameter_value().double_value
@@ -92,38 +91,54 @@ class DetectBase(Node):
 		self.filter_iters = self.filter_iters if (self.filter_type != 'none' and self.filter_iters > 0) else 1
 
 		self.frame_cnt = 0
-		self.rate = self.create_rate(self.f_loop)
+
+		self.pwd = get_package_share_directory('camera_pose')
 
 		# dummies
 		self.rgb_info = CameraInfo()
-		self.rgb_info.k = np.array([1396.5938720703125, 0.0, 944.5514526367188, 0.0, 1395.5264892578125, 547.0949096679688, 0.0, 0.0, 1.0], dtype=np.float64)
-		self.rgb_info.d = np.array([0,0,0,0,0], dtype=np.float64)
-		self.img = cv2.imread(os.path.join(get_package_share_directory('camera_pose'), 'marker/imgs/test_img.jpg'), cv2.IMREAD_COLOR)
+		self.rgb_info.k = [1396.5938720703125, 0.0, 944.5514526367188, 0.0, 1395.5264892578125, 547.0949096679688, 0.0, 0.0, 1.0]
+		self.rgb_info.d = [0.0, 0.0, 0.0, 0.0, 0.0]
+		self.img = cv2.imread(os.path.join(self.pwd, 'marker/imgs/test_img.jpg'), cv2.IMREAD_COLOR, )
+
 		# init ros
 		if not self.test:
 			self.img = None
-			self.bridge = CvBridge()
-			self.get_logger().info("Waiting for camera_info from %s", self.camera_info_topic)
+			self.get_logger().info(f"Waiting for camera_info from {self.camera_info_topic}")
 			(success, self.rgb_info) = wait_for_message(msg_type=CameraInfo, node=self, topic=self.camera_info_topic, time_to_wait=25)
 			if success:
-				self.get_logger().info("Camera info received.\nCamera height: %d, width: %d", self.rgb_info.height, self.rgb_info.width)
+				self.get_logger().info(f"Camera info received. Camera height: {self.rgb_info.height}, width: {self.rgb_info.width}")
 			else:
 				self.get_logger().error("Failed to receive camera info. Exiting...")
-				exit(0)
+				rclpy.shutdown()
 
 		# init detector
-		if self.use_tags:
-			self.det = AprilDetector(marker_length=self.marker_length, 
-									 K=self.rgb_info.k, 
-									 D=self.rgb_info.d,
-									 dt=1/self.fps,
-									 invert_pose=False,
-									 filter_type=self.filter_type)
+		self.det = AprilDetector(marker_length=self.marker_length, 
+								 K=self.rgb_info.k, 
+								 D=self.rgb_info.d,
+								 dt=1/self.fps,
+								 invert_pose=False,
+								 filter_type=self.filter_type,
+								 pwd=self.pwd,
+								 )
 			
 		# init vis	
-		if self.cv_window and self.use_tags:
-			cv2.namedWindow("Processed", cv2.WINDOW_NORMAL)
-			cv2.namedWindow("Detection", cv2.WINDOW_NORMAL)
+		if self.vis:
+			if self.cv_window:
+				cv2.namedWindow("Raw", cv2.WINDOW_NORMAL)
+				cv2.namedWindow("Processed", cv2.WINDOW_NORMAL)
+				cv2.namedWindow("Detection", cv2.WINDOW_NORMAL)
+			else:
+				self.bridge = CvBridge()
+				self.raw_image_pub = self.create_publisher(Image, 'camera_pose_raw', 10)
+				self.proc_image_pub = self.create_publisher(Image, 'camera_pose_processed', 10)
+				self.det_image_pub = self.create_publisher(Image, 'camera_pose_detections', 10)
+
+		# executor
+		self.timer = self.create_timer(1/self.f_loop, self.run)
+
+	def clean(self) -> None:
+		if self.cv_window:
+			cv2.destroyAllWindows()
 
 	def flipOutliers(self, marker_detections: dict, tolerance: float=0.5, exclude_ids: list=[6,7,8,9], normal_type: NormalTypes=NormalTypes.XZ) -> bool:
 		"""Check if all Z axes are oriented similarly and 
@@ -192,60 +207,78 @@ class DetectBase(Node):
 			detections[id]['rot_mat'] = getRotation(rvec, RotTypes.RVEC, RotTypes.MAT)
 			detections[id]['rvec'] = rvec
 	
-	def preProcImage(self, vis: bool=True) -> Tuple[dict, cv2.typing.MatLike, cv2.typing.MatLike, cv2.typing.MatLike]:
+	def preProcImage(self, vis: bool=True) -> Tuple[Union[dict, None], Union[cv2.typing.MatLike, None], Union[cv2.typing.MatLike, None], Union[cv2.typing.MatLike, None]]:
 		""" Put num filter_iters images into
 			fresh detection filter and get last
 			detection.
 		"""
 		# test img
-		raw_img = self.img
+		raw_img = self.img if self.test else None
+		marker_det, det_img, proc_img = None, None, None
+
 		self.det.resetFilters()
 		for i in range(self.filter_iters):
 			self.frame_cnt += 1
+			self.get_logger().debug("Capture frame {}".format(self.frame_cnt))
+
 			if not self.test:
 				# real image
+				self.get_logger().debug("Waiting for image message {}".format(self.frame_cnt))
 				rgb = wait_for_message(msg_type=Image, topic=self.image_topic, node=self, time_to_wait=5)
 				raw_img = self.bridge.imgmsg_to_cv2(rgb, 'bgr8')
-			
-			(marker_det, det_img, proc_img) = self.det.detMarkerPoses(raw_img.copy(), vis if (i >= self.filter_iters-1 and self.vis) else False)
+
+			if raw_img is not None:
+				self.get_logger().debug("Processing frame {}".format(self.frame_cnt))
+				(marker_det, det_img, proc_img) = self.det.detMarkerPoses(raw_img.copy(), vis=(vis if (i >= self.filter_iters-1 and self.vis) else False))
+
+		self.get_logger().debug(f"Found {len(marker_det) if marker_det else 0} markers in the {'test' if self.test else 'live'} image, in frame {self.frame_cnt}. images present: det_img={det_img is not None}, proc_img={proc_img is not None}, raw_img={raw_img is not None}")
 
 		# align rotations by consens
-		if self.flip_outliers:
+		if self.flip_outliers and marker_det is not None:
 			if not self.flipOutliers(marker_det):
-				pass
+				self.get_logger().debug("No outliers were flipped")
 
 		# improve detection
-		if self.refine_pose:
+		if self.refine_pose and marker_det is not None:
 			self.refineDetection(marker_det)
 
 		return marker_det, det_img, proc_img, raw_img
-	
-	def runDebug(self) -> None:
+
+	def show_images(self, det_img: Union[None, cv2.typing.MatLike], proc_img: Union[None, cv2.typing.MatLike], raw_img: Union[None, cv2.typing.MatLike], wait_key: int=1) -> None:
+		if self.cv_window:
+			if raw_img is not None:
+				cv2.imshow('Raw', raw_img)
+			if proc_img is not None:
+				cv2.imshow('Processed', proc_img)
+			if det_img is not None:
+				cv2.imshow('Detection', det_img)
+			if cv2.waitKey(wait_key) == ord("q"):
+				rclpy.shutdown()
+		else:
+			if raw_img is not None:
+				self.raw_image_pub.publish(self.bridge.cv2_to_imgmsg(raw_img, 'bgr8'))
+			if proc_img is not None:
+				self.proc_image_pub.publish(self.bridge.cv2_to_imgmsg(proc_img, 'bgr8'))
+			if det_img is not None:
+				self.det_image_pub.publish(self.bridge.cv2_to_imgmsg(det_img, 'bgr8'))
+
+	def run(self) -> None:
 		try:
-			while rclpy.ok():
-				(marker_det, det_img, proc_img, img) = self.preProcImage()
-				if self.vis:
-					# frame counter
-					cv2.putText(det_img, str(self.frame_cnt), (det_img.shape[1]-100, 50), cv2.FONT_HERSHEY_SIMPLEX, self.FONT_SCALE, self.FONT_CLR, self.FONT_THCKNS, cv2.LINE_AA)
-					if self.cv_window:
-						cv2.imshow('Processed', proc_img)
-						cv2.imshow('Detection', det_img)
-						if cv2.waitKey(1) == ord("q"):
-							break
-				try:
-					self.rate.sleep()
-				except:
-					pass
+			(marker_det, det_img, proc_img, raw_img) = self.preProcImage()
+			self.get_logger().info(f"Frame {self.frame_cnt}: Detected {len(marker_det) if marker_det else 0} markers")
+
+			if self.vis and det_img is not None:
+				# frame counter
+				cv2.putText(det_img, str(self.frame_cnt), (det_img.shape[1]-100, 50), cv2.FONT_HERSHEY_SIMPLEX, self.FONT_SCALE, self.FONT_CLR, self.FONT_THCKNS, cv2.LINE_AA)
+				self.show_images(det_img, proc_img, raw_img)
+			else:
+				self.get_logger().debug("Visualization disabled or images not available")
 
 		except Exception as e:
-			self.get_logger().error(str(e))
-		finally:
-			cv2.destroyAllWindows()
+			self.get_logger().error(f"Exception in run: {e}")
+			rclpy.shutdown()
 
 	def detectionRoutine(self, arg: Any) -> Union[Tuple[dict, cv2.typing.MatLike, cv2.typing.MatLike, int], dict]:
-		raise NotImplementedError
-	
-	def run(self) -> None:
 		raise NotImplementedError
 
 
@@ -271,21 +304,51 @@ class CameraPoseDetect(DetectBase):
 		
 		super().__init__()
 		
-		self.declare_parameter('debug', False)
 		self.declare_parameter('err_term', 2.0)
 		self.declare_parameter('cartesian_bounds_high', (np.pi, np.pi, np.pi))
 		self.declare_parameter('cartesian_bounds_low', (-np.pi, -np.pi, -np.pi))
-		self.declare_parameter('camera_pose_file', os.path.join(get_package_share_directory('camera_pose'), 'config/camera_pose.yaml'))
-		self.declare_parameter('marker_poses_file', os.path.join(get_package_share_directory('camera_pose'), 'config/marker_poses.yaml'))
-
-		self.debug = self.get_parameter('debug').get_parameter_value().bool_value
+		self.declare_parameter('camera_pose_file', '')
+		self.declare_parameter('marker_poses_file', '')
+	
 		self.err_term = self.get_parameter('err_term').get_parameter_value().double_value
 		self.camera_pose_file = self.get_parameter('camera_pose_file').get_parameter_value().string_value
+		if not self.camera_pose_file:
+			self.camera_pose_file = os.path.join(self.pwd, 'config/camera_pose.yaml')
 		self.marker_poses_file = self.get_parameter('marker_poses_file').get_parameter_value().string_value
+		if not self.marker_poses_file:
+			self.marker_poses_file = os.path.join(self.pwd, 'config/marker_poses.yaml')
 		self.lower_bounds = self.get_parameter('cartesian_bounds_low').get_parameter_value().double_array_value
 		self.upper_bounds = self.get_parameter('cartesian_bounds_high').get_parameter_value().double_array_value
 		
+		self.err = np.inf
+		self.init = False
+		self.success = False
 		self.reprojection_errors = {}
+		self.est_camera_pose = np.zeros(6)
+
+		dbg_msg = f"camera_ns='{self.camera_ns}'" \
+				  + f"\nimage_topic='{self.image_topic}'" \
+				  + f"\ncamera_info_topic='{self.camera_info_topic}'" \
+				  + f"\nvis={self.vis}" \
+				  + f"\ntest={self.test}" \
+				  + f"\ncv_window={self.cv_window}" \
+				  + f"\nrefine_pose={self.refine_pose}" \
+				  + f"\nflip_outliers={self.flip_outliers}" \
+				  + f"\nfps={self.fps}" \
+				  + f"\nf_loop={self.f_loop}" \
+				  + f"\nmarker_length={self.marker_length}" \
+				  + f"\nfilter_type={self.filter_type}" \
+				  + f"\nfilter_iters={self.filter_iters}" \
+				  + f"\nK={self.rgb_info.k}" \
+				  + f"\nD={self.rgb_info.d}" \
+				  + f"\ndebug={self.debug}" \
+				  + f"\nerr_term={self.err_term}" \
+				  + f"\ncamera_pose_file={self.camera_pose_file}" \
+				  + f"\nmarker_poses_file={self.marker_poses_file}" \
+				  + f"\nlower_bounds={self.lower_bounds}" \
+				  + f"\nupper_bounds={self.upper_bounds}"
+		
+		self.get_logger().debug(dbg_msg)
 
 		# load camera poses
 		with open(self.camera_pose_file, 'r') as fr:
@@ -295,32 +358,37 @@ class CameraPoseDetect(DetectBase):
 		with open(self.marker_poses_file, 'r') as fr:
 			self.marker_poses = yaml.safe_load(fr)
 
-		if self.debug:
-			dbg_msg = f"camera_ns={self.camera_ns}" \
-					  + f"image_topic={self.image_topic}" \
-					  + f"camera_info_topic={self.camera_info_topic}" \
-					  + f"vis={self.vis}" \
-					  + f"test={self.test}" \
-					  + f"cv_window={self.cv_window}" \
-					  + f"use_tags={self.use_tags}" \
-					  + f"refine_pose={self.refine_pose}" \
-					  + f"flip_outliers={self.flip_outliers}" \
-					  + f"fps={self.fps}" \
-					  + f"f_loop={self.f_loop}" \
-					  + f"marker_length={self.marker_length}" \
-					  + f"filter_type={self.filter_type}" \
-					  + f"filter_iters={self.filter_iters}" \
-					  + f"filter_iters={self.filter_iters}" \
-					  + f"rgb_info={self.rgb_info.k}" \
-					  + f"rgb_info={self.rgb_info.d}" \
-					  + f"debug={self.debug}" \
-					  + f"err_term={self.err_term}" \
-					  + f"camera_pose_file={self.camera_pose_file}" \
-					  + f"marker_poses_file={self.marker_poses_file}" \
-					  + f"lower_bounds={self.lower_bounds}" \
-					  + f"upper_bounds={self.upper_bounds}"
-			
-			self.get_logger().debug(dbg_msg)
+		self.get_logger().info("Running camera_pose node")
+	
+	@property
+	def has_result(self) -> bool:
+		return self.success
+	@property
+	def cam_trans(self) -> Union[None, np.ndarray]:
+		return self.est_camera_pose[:3] if self.success else None
+	@property
+	def cam_rot_ext_xyz_euler(self) -> Union[None, np.ndarray]:
+		return self.est_camera_pose[3:] if self.success else None
+	@property
+	def cam_rot_ext_xyz_quat(self) -> Union[None, np.ndarray]:
+		return getRotation(self.est_camera_pose[3:], RotTypes.EULER, RotTypes.QUAT) if self.success else None
+	@property
+	def cam_rot_ext_xyz_mat(self) -> Union[None, np.ndarray]:
+		return getRotation(self.est_camera_pose[3:], RotTypes.EULER, RotTypes.MAT) if self.success else None
+
+	def write_camera_pose_result(self) -> None:
+		if not self.success:
+			self.get_logger().warning("No valid camera pose to write!")
+			return
+		
+		self.camera_pose['xyz'] = self.cam_trans.tolist()
+		self.camera_pose['rpy'] = self.cam_rot_ext_xyz_euler.tolist()
+		self.camera_pose['quat'] = self.cam_rot_ext_xyz_quat.tolist()
+		self.camera_pose['mat'] = self.cam_rot_ext_xyz_mat.tolist()
+		self.camera_pose['reprojection_error'] = self.err
+
+		with open(self.camera_pose_file, 'w') as fw:
+			yaml.dump(self.camera_pose, fw)
 
 	# def labelDetection(self, img: cv2.typing.MatLike, trans: np.ndarray, rot: np.ndarray, corners: np.ndarray) -> None:
 	# 		pos_txt = "X: {:.4f} Y:  {:.4f} Z:  {:.4f}".format(trans[0], trans[1], trans[2])
@@ -335,26 +403,26 @@ class CameraPoseDetect(DetectBase):
 	# 		cv2.putText(img, ori_txt, (x_max+x_offset, y_max+(y_offset2 if y_offset1 > 0 else y_offset1)), cv2.FONT_HERSHEY_SIMPLEX, self.FONT_SCALE, self.FONT_CLR, self.FONT_THCKNS, cv2.LINE_AA)
 
 	def labelDetection(self, img: cv2.typing.MatLike, id: int, trans: np.ndarray, rot: np.ndarray, err: Optional[Union[float, None]]=None) -> None:
-			if id > -1:
-				repr_error = self.reprojection_errors.get(id)
-				if repr_error is None:
-					repr_error = -1.0
-				pos_txt = "{} X: {:.4f} Y: {:.4f} Z: {:.4f} R: {:.4f} P: {:.4f} Y: {:.4f}, err {:.2f}".format(id, trans[0], trans[1], trans[2], rot[0], rot[1], rot[2], repr_error)
-				xpos = self.TXT_OFFSET
-				ypos = (id+1)*self.TXT_OFFSET
-				cv2.putText(img, pos_txt, (xpos, ypos), cv2.FONT_HERSHEY_SIMPLEX, self.FONT_SCALE, self.det.RED, self.FONT_THCKNS, cv2.LINE_AA)
-			else:
-				xpos = self.TXT_OFFSET
-				ypos = self.CAM_LABEL_YPOS*self.TXT_OFFSET
-				cv2.putText(img, "CAMERA", (xpos, ypos), cv2.FONT_HERSHEY_SIMPLEX, self.FONT_SCALE, self.det.GREEN, self.FONT_THCKNS, cv2.LINE_AA)
-				cv2.putText(img, "X {:.4f}".format(trans[0]), (xpos, ypos+2*self.TXT_OFFSET), cv2.FONT_HERSHEY_SIMPLEX, self.FONT_SCALE, self.det.GREEN, self.FONT_THCKNS, cv2.LINE_AA)
-				cv2.putText(img, "Y {:.4f}".format(trans[1]), (xpos, ypos+3*self.TXT_OFFSET), cv2.FONT_HERSHEY_SIMPLEX, self.FONT_SCALE, self.det.GREEN, self.FONT_THCKNS, cv2.LINE_AA)
-				cv2.putText(img, "Z {:.4f}".format(trans[2]), (xpos, ypos+4*self.TXT_OFFSET), cv2.FONT_HERSHEY_SIMPLEX, self.FONT_SCALE, self.det.GREEN, self.FONT_THCKNS, cv2.LINE_AA)
-				cv2.putText(img, "roll {:.4f}".format(rot[0]), (xpos, ypos+5*self.TXT_OFFSET), cv2.FONT_HERSHEY_SIMPLEX, self.FONT_SCALE, self.det.GREEN, self.FONT_THCKNS, cv2.LINE_AA)
-				cv2.putText(img, "pitch {:.4f}".format(rot[1]), (xpos, ypos+6*self.TXT_OFFSET), cv2.FONT_HERSHEY_SIMPLEX, self.FONT_SCALE, self.det.GREEN, self.FONT_THCKNS, cv2.LINE_AA)
-				cv2.putText(img, "yaw {:.4f}".format(rot[2]), (xpos, ypos+7*self.TXT_OFFSET), cv2.FONT_HERSHEY_SIMPLEX, self.FONT_SCALE, self.det.GREEN, self.FONT_THCKNS, cv2.LINE_AA)
-				if err is not None and err is not np.inf:
-					cv2.putText(img, "mean reprojection error: {:.4f}".format(err), (xpos, ypos+8*self.TXT_OFFSET), cv2.FONT_HERSHEY_SIMPLEX, self.FONT_SCALE, self.det.GREEN, self.FONT_THCKNS, cv2.LINE_AA)
+		if id > -1:
+			repr_error = self.reprojection_errors.get(id)
+			if repr_error is None:
+				repr_error = -1.0
+			pos_txt = "{} X: {:.4f} Y: {:.4f} Z: {:.4f} R: {:.4f} P: {:.4f} Y: {:.4f}, err {:.2f}".format(id, trans[0], trans[1], trans[2], rot[0], rot[1], rot[2], repr_error)
+			xpos = self.TXT_OFFSET
+			ypos = (id+1)*self.TXT_OFFSET
+			cv2.putText(img, pos_txt, (xpos, ypos), cv2.FONT_HERSHEY_SIMPLEX, self.FONT_SCALE, self.det.RED, self.FONT_THCKNS, cv2.LINE_AA)
+		else:
+			xpos = self.TXT_OFFSET
+			ypos = self.CAM_LABEL_YPOS*self.TXT_OFFSET
+			cv2.putText(img, "CAMERA", (xpos, ypos), cv2.FONT_HERSHEY_SIMPLEX, self.FONT_SCALE, self.det.GREEN, self.FONT_THCKNS, cv2.LINE_AA)
+			cv2.putText(img, "X {:.4f}".format(trans[0]), (xpos, ypos+2*self.TXT_OFFSET), cv2.FONT_HERSHEY_SIMPLEX, self.FONT_SCALE, self.det.GREEN, self.FONT_THCKNS, cv2.LINE_AA)
+			cv2.putText(img, "Y {:.4f}".format(trans[1]), (xpos, ypos+3*self.TXT_OFFSET), cv2.FONT_HERSHEY_SIMPLEX, self.FONT_SCALE, self.det.GREEN, self.FONT_THCKNS, cv2.LINE_AA)
+			cv2.putText(img, "Z {:.4f}".format(trans[2]), (xpos, ypos+4*self.TXT_OFFSET), cv2.FONT_HERSHEY_SIMPLEX, self.FONT_SCALE, self.det.GREEN, self.FONT_THCKNS, cv2.LINE_AA)
+			cv2.putText(img, "roll {:.4f}".format(rot[0]), (xpos, ypos+5*self.TXT_OFFSET), cv2.FONT_HERSHEY_SIMPLEX, self.FONT_SCALE, self.det.GREEN, self.FONT_THCKNS, cv2.LINE_AA)
+			cv2.putText(img, "pitch {:.4f}".format(rot[1]), (xpos, ypos+6*self.TXT_OFFSET), cv2.FONT_HERSHEY_SIMPLEX, self.FONT_SCALE, self.det.GREEN, self.FONT_THCKNS, cv2.LINE_AA)
+			cv2.putText(img, "yaw {:.4f}".format(rot[2]), (xpos, ypos+7*self.TXT_OFFSET), cv2.FONT_HERSHEY_SIMPLEX, self.FONT_SCALE, self.det.GREEN, self.FONT_THCKNS, cv2.LINE_AA)
+			if err is not None and err is not np.inf:
+				cv2.putText(img, "mean reprojection error: {:.4f}".format(err), (xpos, ypos+8*self.TXT_OFFSET), cv2.FONT_HERSHEY_SIMPLEX, self.FONT_SCALE, self.det.GREEN, self.FONT_THCKNS, cv2.LINE_AA)
 
 	def reprojectionError(self, det_corners: np.ndarray, proj_corners: np.ndarray) -> float:
 		error = np.linalg.norm(det_corners - proj_corners, axis=1)
@@ -375,7 +443,7 @@ class CameraPoseDetect(DetectBase):
 			cv2.putText(img, str(id), (projected_corners[0][0]+5, projected_corners[0][1]+5), cv2.FONT_HERSHEY_SIMPLEX, self.FONT_SCALE, self.FONT_CLR, self.FONT_THCKNS, cv2.LINE_AA)
 		return self.reprojectionError(detection['corners'], projected_corners)
 	
-	def projectMarkers(self, detection:dict, camera_pose: np.ndarray, img: cv2.typing.MatLike=None) -> float:
+	def projectMarkers(self, detection:dict, camera_pose: np.ndarray, img: cv2.typing.MatLike=None) -> list:
 		err = []
 		# invert world to camera tf for reprojection
 		tvec_inv, euler_inv = invPersp(tvec=camera_pose[:3], rot=camera_pose[3:], rot_t=RotTypes.EULER)
@@ -477,13 +545,14 @@ class CameraPoseDetect(DetectBase):
 			# reproject markers
 			errors = self.projectMarkers(detection, opt_cam_pose, img)
 			reserr = np.mean(errors) if len(errors) else np.inf
-			txt = f"Result: {res.status} {res.message}\n"
-			txt += f"camera world pose trans: {opt_cam_pose[:3]}, rot (extr. xyz euler): {opt_cam_pose[3:]}\n"
-			txt += f"reprojection error: {reserr}\n"
-			txt += f"cost: {res.cost}\n"
-			txt += f"evaluations: {res.nfev}\n"
-			txt += f"optimality: {res.optimality}\n"
-			self.get_logger().info(txt)
+			self.get_logger().info(
+				f"Result: {res.status} {res.message}\n"
+				f"camera world pose trans: {opt_cam_pose[:3]}, rot (extr. xyz euler): {opt_cam_pose[3:]}\n"
+				f"reprojection error: {reserr}\n"
+				f"cost: {res.cost}\n"
+				f"evaluations: {res.nfev}\n"
+				f"optimality: {res.optimality}\n"
+			)
 
 			for id, error in self.reprojection_errors.items():
 				if error > self.err_term:
@@ -511,82 +580,66 @@ class CameraPoseDetect(DetectBase):
 			filtered_pose[3:] = filter.est_rotation_as_euler
 			self.labelDetection(img, 30, filtered_pose[:3], filtered_pose[3:])
 			err = self.projectMarkers(detection, filtered_pose, img)
-		self.get_logger().info(f"camera world pose trans: {filtered_pose[:3]}, rot (extr. xyz euler): {filtered_pose[3:]}")
+			self.get_logger().info(f"camera world pose trans: {filtered_pose[:3]}, rot (extr. xyz euler): {filtered_pose[3:]}")
 		
 		return err, filtered_pose
 		
 	def run(self) -> None:
-		init = True
-		success = False
-		err = np.inf
-		est_camera_pose = np.zeros(6)
-
 		try:
-			while rclpy.ok():
-					
-					# detect markers 
-					(marker_det, det_img, proc_img, _) = self.preProcImage()
+			# detect markers 
+			(marker_det, det_img, proc_img, raw_img) = self.preProcImage()
 
-					# initially show 
-					if self.vis and self.cv_window:
-						cv2.imshow('Processed', proc_img)
-						cv2.imshow('Detection', det_img)
-						if cv2.waitKey(10000 if init else 1) == ord("q"):
-							break
+			# initially show 
+			if self.vis:
+				self.show_images(None, proc_img, raw_img, 1 if self.init else 10000)
 
-					# estimate cam pose
-					if marker_det:
+			# estimate cam pose
+			if marker_det is not None and det_img is not None:
+				initial_guess = self.est_camera_pose if self.init else self.initialGuess(marker_det)
+				self.init = True
 
-						initial_guess = est_camera_pose
-						if init:
-							init = False
-							initial_guess = self.initialGuess(marker_det)
+				self.get_logger().info("Running estimation")
+				(self.err, self.est_camera_pose) = self.estimatePoseLS(det_img, self.err, initial_guess, marker_det)
 
-						self.get_logger().info("Running estimation")
-						(err, est_camera_pose) = self.estimatePoseLS(det_img, err, initial_guess, marker_det)
+				if self.err <= self.err_term:
+					self.success = True
+					self.write_camera_pose_result()
+					self.get_logger().info(f"Pose estimation terminated.\nEstimated camera pose xyz (m): {self.est_camera_pose[:3]},\nextr. xyz Euler angles (rad): {self.est_camera_pose[3:]}, mean reprojection error: {self.err}")
 
-						if err <= self.err_term:
-							self.get_logger().info(f"Estimated camera pose xyz (m): {est_camera_pose[:3]}, extr. xyz Euler angles (rad): {est_camera_pose[3:]}, mean reprojection error: {err}")
-							success = True
+			if self.vis and det_img is not None:
+				# frame counter
+				cv2.putText(det_img, str(self.frame_cnt), (det_img.shape[1]-40, 20), cv2.FONT_HERSHEY_SIMPLEX, self.FONT_SCALE, self.FONT_CLR, self.FONT_THCKNS, cv2.LINE_AA)
+				
+				if marker_det is not None:
+					# label marker pose
+					for id, det in marker_det.items():
+						self.labelDetection(det_img, id, det['ftrans'], det['frot'])
 
-					if self.vis:
-						# frame counter
-						cv2.putText(det_img, str(self.frame_cnt), (det_img.shape[1]-40, 20), cv2.FONT_HERSHEY_SIMPLEX, self.FONT_SCALE, self.FONT_CLR, self.FONT_THCKNS, cv2.LINE_AA)
-						for id, det in marker_det.items():
-							# label marker pose
-							self.labelDetection(det_img, id, det['ftrans'], det['frot'])
-
-						if self.cv_window:
-							cv2.imshow('Processed', proc_img)
-							cv2.imshow('Detection', det_img)
-							if cv2.waitKey(100000 if success else 1) == ord("q"):
-								break
-					
-					if success:
-						break
-
-					try:
-						self.rate.sleep()
-					except:
-						pass
+					self.show_images(det_img, None, None, 100000 if self.success else 1)
+			
+			if self.success:
+				rclpy.shutdown()
 
 		except Exception as e:
-			self.get_logger().error(f"Error occurred: {e}")
-
-		finally:
-			cv2.destroyAllWindows()
+			self.get_logger().error(f"Error occurred in run: {e}")
+			rclpy.shutdown()
 
 def main():
 	rclpy.init()
 	node = None
-	try:
-		if "camera_pose" in sys.argv:
-			node = CameraPoseDetect().run()
-		else:
-			node = DetectBase().runDebug()
-	finally:
-		if node is not None:
-			node.destroy_node()
+
+	if "camera_pose" in sys.argv:
+		node = CameraPoseDetect()
+	else:
+		node = DetectBase()
+
+	rclpy.spin(node)
+
+	if node is not None:
+		node.clean()
+		node.destroy_node()
+
+	if rclpy.ok():
 		rclpy.shutdown()
 
 if __name__ == '__main__':
