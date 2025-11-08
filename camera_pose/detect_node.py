@@ -119,6 +119,7 @@ class DetectBase(Node):
 								 invert_pose=False,
 								 filter_type=self.filter_type,
 								 pwd=self.pwd,
+								 log_info_fn=self.get_logger().info,
 								 )
 			
 		# init vis	
@@ -307,8 +308,10 @@ class CameraPoseDetect(DetectBase):
 		super().__init__()
 		
 		self.declare_parameter('err_term', 2.0)
-		self.declare_parameter('cartesian_bounds_high', (np.pi, np.pi, np.pi))
-		self.declare_parameter('cartesian_bounds_low', (-np.pi, -np.pi, -np.pi))
+		self.declare_parameter('cartesian_bounds_low', 3*[-np.pi])
+		self.declare_parameter('rotational_bounds_low', 3*[-np.pi])
+		self.declare_parameter('cartesian_bounds_high', 3*[np.pi])
+		self.declare_parameter('rotational_bounds_high', 3*[np.pi])
 		self.declare_parameter('camera_pose_file', '')
 		self.declare_parameter('marker_poses_file', '')
 	
@@ -319,9 +322,15 @@ class CameraPoseDetect(DetectBase):
 		self.marker_poses_file = self.get_parameter('marker_poses_file').get_parameter_value().string_value
 		if not self.marker_poses_file:
 			self.marker_poses_file = os.path.join(self.pwd, 'config/marker_poses.yaml')
-		self.lower_bounds = self.get_parameter('cartesian_bounds_low').get_parameter_value().double_array_value
-		self.upper_bounds = self.get_parameter('cartesian_bounds_high').get_parameter_value().double_array_value
 		
+		# optimization bounds
+		cartesian_lower_bounds = self.get_parameter('cartesian_bounds_low').get_parameter_value().double_array_value.tolist()
+		cartesian_upper_bounds = self.get_parameter('cartesian_bounds_high').get_parameter_value().double_array_value.tolist()
+		rotational_lower_bounds = self.get_parameter('rotational_bounds_low').get_parameter_value().double_array_value.tolist()
+		rotational_upper_bounds = self.get_parameter('rotational_bounds_high').get_parameter_value().double_array_value.tolist()
+		self.lower_bounds = np.array(cartesian_lower_bounds + rotational_lower_bounds, dtype=np.float32)
+		self.upper_bounds = np.array(cartesian_upper_bounds + rotational_upper_bounds, dtype=np.float32)
+
 		self.err = np.inf
 		self.init = False
 		self.success = False
@@ -469,10 +478,15 @@ class CameraPoseDetect(DetectBase):
 		# marker root tf
 		root = self.marker_poses.get('root')
 		T_world_root = pose2Matrix(root['xyz'], root['rpy'], RotTypes.EULER) if root is not None else np.eye(4)
+		
 		# marker tf
 		marker = self.marker_poses.get(id)
-		assert(marker) # marker id entry in yaml?
+		if marker is None:	
+			self.get_logger().warning(f"id {id} not present in marker poses!")
+			return T_world_root
+		
 		T_root_marker = pose2Matrix(marker['xyz'], marker['rpy'], RotTypes.EULER)
+
 		# worldTmarker
 		return T_world_root @ T_root_marker
 	
@@ -482,20 +496,26 @@ class CameraPoseDetect(DetectBase):
 		if det is None:
 			self.get_logger().warning(f"Cannot find id {id} in detection!")
 			return tf
+		
 		# get markerTcamera
 		inv_tvec, inv_euler = invPersp(tvec=det['ftrans'], rot=det['frot'], rot_t=RotTypes.EULER)
 		T_marker_cam = pose2Matrix(inv_tvec, inv_euler, RotTypes.EULER)
-		# get worldTcamera
+
+		# get worldTmarker
 		T_world_marker = self.getWorldMarkerTF(id)
+
+		# compute worldTcamera
 		T_world_cam = T_world_marker @ T_marker_cam
 		tf[:3] = T_world_cam[:3, 3]
 		tf[3:] = R.from_matrix(T_world_cam[:3, :3]).as_euler('xyz')
+
 		return tf
 	
 	def initialGuess(self, detection: dict) -> np.ndarray:
 		# get pose for id with min detection error
 		errs = [val['pose_err'] for val in detection.values()]
 		min_err_idx = errs.index(min(errs))
+
 		return self.camTF(detection, min_err_idx)
 
 	def residuals(self, camera_pose: np.ndarray, marker_poses: dict, detection: dict) -> np.ndarray:
@@ -532,51 +552,64 @@ class CameraPoseDetect(DetectBase):
 		return np.hstack(error) if len(error) else np.array(error)
 
 	def estimatePoseLS(self, img: cv2.typing.MatLike, err: float, est_camera_pose: np.ndarray, detection: dict) -> np.ndarray:
-		res = least_squares(self.residuals, 
-							est_camera_pose, 
-							args=(self.marker_poses, detection),
-							method='trf', 
-							bounds=(self.lower_bounds, self.upper_bounds),
-							max_nfev=5000, # max iterations
-							ftol=1e-8,    # tolerance for the cost function
-							xtol=1e-8,    # tolerance for the solution parameters
-							gtol=1e-8     # tolerance for the gradient
-							)
-		if res.success:
-			opt_cam_pose = res.x
-			# reproject markers
-			errors = self.projectMarkers(detection, opt_cam_pose, img)
-			reserr = np.mean(errors) if len(errors) else np.inf
-			self.get_logger().info(
-				f"Result: {res.status} {res.message}\n"
-				f"camera world pose trans: {opt_cam_pose[:3]}, rot (extr. xyz euler): {opt_cam_pose[3:]}\n"
-				f"reprojection error: {reserr}\n"
-				f"cost: {res.cost}\n"
-				f"evaluations: {res.nfev}\n"
-				f"optimality: {res.optimality}\n"
-			)
+		try:
+			res = least_squares(self.residuals, 
+								est_camera_pose, 
+								args=(self.marker_poses, detection),
+								method='trf', 
+								bounds=(self.lower_bounds, self.upper_bounds),
+								max_nfev=5000, # max iterations
+								ftol=1e-8,    # tolerance for the cost function
+								xtol=1e-8,    # tolerance for the solution parameters
+								gtol=1e-8     # tolerance for the gradient
+								)
+			
+			if res.success:
+				opt_cam_pose = res.x
+				# reproject markers
+				errors = self.projectMarkers(detection, opt_cam_pose, img)
+				reserr = np.mean(errors) if len(errors) else np.inf
+				self.get_logger().info(
+					f"Result: {res.status} {res.message}\n"
+					f"camera world pose trans: {opt_cam_pose[:3]}, rot (extr. xyz euler): {opt_cam_pose[3:]}\n"
+					f"reprojection error: {reserr}\n"
+					f"cost: {res.cost}\n"
+					f"evaluations: {res.nfev}\n"
+					f"optimality: {res.optimality}\n"
+				)
 
-			for id, error in self.reprojection_errors.items():
-				if error > self.err_term:
-					self.get_logger().warning(f"id {id} reprojection error: {error:.2f} > {self.err_term} threshold")
+				for id, error in self.reprojection_errors.items():
+					if error > self.err_term:
+						self.get_logger().warning(f"id {id} reprojection error: {error:.2f} > {self.err_term} threshold")
 
-			# put pose label
-			self.labelDetection(img, -1, opt_cam_pose[:3], opt_cam_pose[3:], reserr)
+				# put pose label
+				self.labelDetection(img, -1, opt_cam_pose[:3], opt_cam_pose[3:], reserr)
 
-			return reserr, opt_cam_pose
-		
-		self.get_logger().warning(f"Least squares failed: {res.status} {res.message}")
+				return reserr, opt_cam_pose
+
+			else:
+				self.get_logger().warning(f"Least squares failed: {res.status} {res.message}")
+
+		except Exception as e:
+			msg = f"Least squares optimization failed: {e}\n:" \
+					+ f"estimate: {est_camera_pose}," \
+					+ f"\nmarker poses: ".join(f'\n{k}: {v}' for k, v in self.marker_poses.items()) \
+					+ f"\nbounds: {(self.lower_bounds, self.upper_bounds)}"
+			self.get_logger().error(msg)
+
 		return err, est_camera_pose
 	
 	def estimatePoseFL(self, img: cv2.typing.MatLike, err: float, detection: dict) -> np.ndarray:
 		filter = None
 		filtered_pose = np.zeros(6)
+		
 		for id in detection:
 			T_world_cam = self.camTF(detection, id)
 			if filter is None:
 				filter = createFilter(self.filter_type, PoseFilterBase.poseToMeasurement(tvec=T_world_cam[:3], rot=T_world_cam[3:], rot_t=RotTypes.EULER), self.f_loop)
 			else:
 				filter.updateFilter(PoseFilterBase.poseToMeasurement(tvec=T_world_cam[:3], rot=T_world_cam[3:], rot_t=RotTypes.EULER))
+		
 		if filter is not None:
 			filtered_pose[:3] = filter.est_translation
 			filtered_pose[3:] = filter.est_rotation_as_euler
@@ -587,7 +620,7 @@ class CameraPoseDetect(DetectBase):
 		return err, filtered_pose
 		
 	def run(self) -> None:
-		try:
+		# try:
 			# detect markers 
 			(marker_det, det_img, proc_img, raw_img) = self.preProcImage()
 
@@ -622,9 +655,9 @@ class CameraPoseDetect(DetectBase):
 			if self.success:
 				rclpy.shutdown()
 
-		except Exception as e:
-			self.get_logger().error(f"Error occurred in run: {e}")
-			rclpy.shutdown()
+		# except Exception as e:
+		# 	self.get_logger().error(f"Error occurred in run: {e}")
+		# 	rclpy.shutdown()
 
 def main():
 	rclpy.init()

@@ -3,6 +3,7 @@
 import os
 import cv2
 import yaml
+import logging
 import dataclasses
 import numpy as np
 import cv2.aruco as aru
@@ -73,6 +74,10 @@ class MarkerDetectorBase():
 				 invert_pose: Optional[bool]=False,
 				 filter_type: Optional[Union[FilterTypes, str]]=FilterTypes.NONE,
 				 pwd: Optional[Union[str,None]]=None,
+				 log_debug_fn: Optional[Callable[[str], None]]=None,
+				 log_info_fn: Optional[Callable[[str], None]]=None,
+				 log_warning_fn: Optional[Callable[[str], None]]=None,
+				 log_error_fn: Optional[Callable[[str], None]]=None,
 				 ) -> None:
 		
 		# params
@@ -102,6 +107,12 @@ class MarkerDetectorBase():
 		self.t_total = 0
 		self.it_total = 0
 		self._genSquarePoints(marker_length)
+
+		self.logger = logging.getLogger(__file__)
+		self.log_debug = self.logger.debug if log_debug_fn is None else log_debug_fn
+		self.log_info = self.logger.info if log_info_fn is None else log_info_fn
+		self.log_warning = self.logger.warning if log_warning_fn is None else log_warning_fn
+		self.log_error = self.logger.error if log_error_fn is None else log_error_fn
 
 	def setDetectorParams(self, config: Any, level: int) -> Any:
 		with self.params_lock:
@@ -179,7 +190,7 @@ class MarkerDetectorBase():
 		self.t_total += t_current
 		self.it_total += 1
 		if self.it_total % 10 == 0:
-			print("Detection Time = {} ms (Mean = {} ms)".format(int(t_current * 1000), int(1000 * self.t_total / self.it_total)))
+			self.log_info("Detection Time = {} ms (Mean = {} ms)".format(int(t_current * 1000), int(1000 * self.t_total / self.it_total)))
 
 	def _drawCamCS(self, img: cv2.typing.MatLike) -> None:
 		thckns = 2
@@ -257,6 +268,10 @@ class AprilDetector(MarkerDetectorBase):
 				 marker_family: Optional[str]='tag16h5',
 				 debug: Optional[bool]=False,
 				 pwd: Optional[str]=os.path.dirname(os.path.abspath(__file__)),
+				 log_debug_fn: Optional[Callable[[str], None]]=None,
+				 log_info_fn: Optional[Callable[[str], None]]=None,
+				 log_warning_fn: Optional[Callable[[str], None]]=None,
+				 log_error_fn: Optional[Callable[[str], None]]=None,
 				 ) -> None:
 		
 		super().__init__(K=K, 
@@ -268,14 +283,19 @@ class AprilDetector(MarkerDetectorBase):
 					     print_stats=print_stats, 
 					     filter_type=filter_type,
 						 pwd=pwd,
+						 log_debug_fn=log_debug_fn,
+						 log_info_fn=log_info_fn,
+						 log_warning_fn=log_warning_fn,
+						 log_error_fn=log_error_fn,
 					     )
+		
 		self.det = apl.Detector(families=marker_family, 
 								nthreads=self.params.nthreads,
 								quad_decimate=self.params.quad_decimate,   
 								quad_sigma=self.params.quad_sigma,
 								refine_edges=self.params.refine_edges, 
 								decode_sharpening=self.params.decode_sharpening,
-								debug=False,
+								debug=debug,
 								)
 		self.debug = debug
 		self.params_change = False
@@ -283,7 +303,8 @@ class AprilDetector(MarkerDetectorBase):
 		self._printSettings()
 
 	def _printSettings(self) -> None:
-		txt =  f"Running Apriltag Detector with settings:\n"
+		txt =  "#########################################\n"
+		txt += "Running Apriltag Detector with settings:\n"
 		txt += f"Camera params fx: {self.camera_params[0]}, fy: {self.camera_params[1]}, cx: {self.camera_params[2]}, cy: {self.camera_params[3]}\n"
 		txt += f"Distorsion: {self.dist}\n"
 		txt += f"print_stats: {self.print_stats},\n"
@@ -293,16 +314,15 @@ class AprilDetector(MarkerDetectorBase):
 		for attr in dir(self.params):
 			if not attr.startswith('__'):
 				txt += f"{attr}: {self.params.__getattribute__(attr)},\n"
-		print(txt)
-		print()
+		self.log_info(txt)
 
 	def _validateDetection(self, detection: apl.Detection) -> bool:
 		corners = detection.corners.astype(int)
 		marker_width = np.linalg.norm(corners[0] - corners[1])
 		marker_height = np.linalg.norm(corners[1] - corners[2])
 		if self.debug:
-			print(detection)
-			print(marker_height, marker_width)
+			self.log_info(str(detection))
+			self.log_info("marker_height: {}, marker_width: {}".format(marker_height, marker_width))
 		return detection.decision_margin >= self.params.decision_margin \
 						and detection.hamming <= self.params.max_hamming \
 							and marker_width >= self.params.min_marker_width \

@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+import numpy as np
+
 from launch_ros.actions import Node
 from launch import LaunchDescription
 from launch.substitutions import LaunchConfiguration
@@ -10,7 +12,9 @@ from ament_index_python.packages import get_package_share_directory
 def launch_setup(context, *args, **kwargs):
 	start_setup = []
 
+	vis = LaunchConfiguration('vis').perform(context).lower() == 'true'
 	debug = LaunchConfiguration('debug').perform(context).lower() == 'true'
+	cv_window = LaunchConfiguration('cv_window').perform(context).lower() == 'true'
 	debug_vis = LaunchConfiguration('debug_vis').perform(context).lower() == 'true'
 	markers_camera_name = LaunchConfiguration('markers_camera_name', default='').perform(context)
 	
@@ -48,7 +52,19 @@ def launch_setup(context, *args, **kwargs):
 
 	image_topic = LaunchConfiguration('image_topic').perform(context) if not markers_camera_name else f'/{markers_camera_name}/camera/color/image_raw'
 	camera_info_topic = LaunchConfiguration('camera_info_topic').perform(context) if not markers_camera_name else f'/{markers_camera_name}/camera/color/camera_info'
-	
+
+	if vis and not cv_window:
+		start_setup.append(
+			Node(
+				package='rqt_image_view',
+				executable='rqt_image_view',
+				name='rqt_image_view_camera_pose',
+				namespace='',
+				arguments=[image_topic],
+				output='screen',
+			),
+		)
+
 	start_setup.append(
 		Node(
 			package='camera_pose',
@@ -167,6 +183,26 @@ def generate_launch_description():
 				default_value="0.015",
 				description=''
 			),
+			DeclareLaunchArgument(
+				'cartesian_bounds_low',
+				default_value=f"{3*[-np.pi]}",
+				description=''
+				),
+			DeclareLaunchArgument(
+				'rotational_bounds_low',
+				default_value=f"{3*[-np.pi]}",
+				description=''
+				),
+			DeclareLaunchArgument(
+				'cartesian_bounds_high',
+				default_value=f"{3*[np.pi]}",
+				description=''
+				),
+			DeclareLaunchArgument(
+				'rotational_bounds_high',
+				default_value=f"{3*[np.pi]}",
+				description=''
+				),
 			DeclareLaunchArgument(
 				"use_reconfigure",
 				default_value="false",
