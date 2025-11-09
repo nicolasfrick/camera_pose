@@ -6,7 +6,7 @@ from launch_ros.actions import Node
 from launch import LaunchDescription
 from launch.substitutions import LaunchConfiguration
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.actions import DeclareLaunchArgument, OpaqueFunction, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, OpaqueFunction, IncludeLaunchDescription, ExecuteProcess
 from ament_index_python.packages import get_package_share_directory
 
 def launch_setup(context, *args, **kwargs):
@@ -16,9 +16,14 @@ def launch_setup(context, *args, **kwargs):
 	debug = LaunchConfiguration('debug').perform(context).lower() == 'true'
 	cv_window = LaunchConfiguration('cv_window').perform(context).lower() == 'true'
 	debug_vis = LaunchConfiguration('debug_vis').perform(context).lower() == 'true'
-	markers_camera_name = LaunchConfiguration('markers_camera_name', default='').perform(context)
 	
-	if markers_camera_name != "":
+	bagfile = LaunchConfiguration('bagfile', default='').perform(context)
+	markers_camera_name = LaunchConfiguration('markers_camera_name', default='').perform(context)
+	image_topic = LaunchConfiguration('image_topic').perform(context) if not markers_camera_name and not bagfile else f'/{markers_camera_name if markers_camera_name else "camera"}/camera/color/image_raw'
+	camera_info_topic = LaunchConfiguration('camera_info_topic').perform(context) if not markers_camera_name and not bagfile else f'/{markers_camera_name if markers_camera_name else "camera"}/camera/color/camera_info'
+
+	# realsense
+	if markers_camera_name != "" and bagfile == "":
 		depth_profile = f"{LaunchConfiguration('depth_width').perform(context)}x{LaunchConfiguration('depth_height').perform(context)}x{LaunchConfiguration('depth_fps').perform(context)}"
 		color_profile = f"{LaunchConfiguration('color_width').perform(context)}x{LaunchConfiguration('color_height').perform(context)}x{LaunchConfiguration('color_fps').perform(context)}"
 		
@@ -49,10 +54,18 @@ def launch_setup(context, *args, **kwargs):
 								}.items()
 			)
 		)
+	
+	# rosbag
+	elif bagfile != "":
+		cmd = ['ros2', 'bag', 'play', f'{bagfile}', '--read-ahead-queue-size', '1000', '--rate', '1.0']
+		start_setup.append(
+			ExecuteProcess(
+				cmd=cmd,
+				output='screen',
+			),
+		)
 
-	image_topic = LaunchConfiguration('image_topic').perform(context) if not markers_camera_name else f'/{markers_camera_name}/camera/color/image_raw'
-	camera_info_topic = LaunchConfiguration('camera_info_topic').perform(context) if not markers_camera_name else f'/{markers_camera_name}/camera/color/camera_info'
-
+	# viewer
 	if vis and not cv_window:
 		start_setup.append(
 			Node(
@@ -65,6 +78,7 @@ def launch_setup(context, *args, **kwargs):
 			),
 		)
 
+	# camera pose node
 	start_setup.append(
 		Node(
 			package='camera_pose',
@@ -90,6 +104,10 @@ def launch_setup(context, *args, **kwargs):
 				'debug': debug,
 				'fps': LaunchConfiguration('fps'),
 				'err_term': LaunchConfiguration('err_term'),
+				'cartesian_bounds_low': LaunchConfiguration('cartesian_bounds_low',),
+				'rotational_bounds_low': LaunchConfiguration('rotational_bounds_low',),
+				'cartesian_bounds_high': LaunchConfiguration('cartesian_bounds_high',),
+				'rotational_bounds_high': LaunchConfiguration('rotational_bounds_high',),
 			}],
 			arguments=['camera_pose' if not debug_vis else ''],
 			ros_arguments=['--log-level', 'debug' if debug else 'info'],
@@ -99,6 +117,7 @@ def launch_setup(context, *args, **kwargs):
 
 	return start_setup
 		
+
 def generate_launch_description():
 
 	return LaunchDescription([
@@ -223,6 +242,11 @@ def generate_launch_description():
 				"vis",
 				default_value="true",
 				description=''
+			),
+			DeclareLaunchArgument(
+				"bagfile",
+				default_value="",
+				description='Path to a rosbag to playback.'
 			),
 			# rs params
 			DeclareLaunchArgument(

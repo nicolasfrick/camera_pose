@@ -25,8 +25,7 @@ When there is an installation available of ROS on the system, in non-conda envir
 $ conda create -n ros_env -c conda-forge -c robostack-humble ros-humble-desktop
 $ conda activate ros_env
 $ conda install -c conda-forge compilers cmake pkg-config make ninja colcon-common-extensions catkin_tools rosdep
-# fix unknown build flag using --symlink-install with colcon 
-# and setup.py by downgrading setuptools
+### fix unknown build flag using --symlink-install with colcon and setup.py by downgrading setuptools ###
 $ conda install -n ros_env -c conda-forge setuptools=79.0.1
 ```
 
@@ -35,8 +34,17 @@ Clone the repository and install package dependencies.
 $ mkdir -p $HOME/camera_ws/src
 $ cd $HOME/camera_ws/src
 $ git clone https://github.com/nicolasfrick/camera_pose.git
+
+# install conda packages
 $ conda activate ros_env
+$ conda install -c conda-forge -c robostack-staging -c robostack-humble ros-humble-librealsense2 ros-humble-realsense2-camera ros-humble-realsense2-camera-msgs ros-humble-realsense2-description
+
+# install python packages
 $ pip install opencv-python dt-apriltags scipy PyYAML pandas
+$ rosdep init && rosdep update
+$ rosdep install --from-paths src --ignore-src -r -y --skip-keys="ament_python opencv-python dt-apriltags"
+
+# build
 $ cd $HOME/camera_ws
 $ colcon build --symlink-install
 ```

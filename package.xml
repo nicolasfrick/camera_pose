@@ -16,6 +16,7 @@
   <depend>image_transport</depend>
   
   <exec_depend>realsense2_camera</exec_depend>
+  <exec_depend>rosbag2_transport</exec_depend>
   <exec_depend>rqt_image_view</exec_depend>
 
   <export>
