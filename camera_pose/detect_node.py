@@ -227,9 +227,11 @@ class DetectBase(Node):
 			if not self.test:
 				# real image
 				self.get_logger().debug("Waiting for image message {}".format(self.frame_cnt))
-				rgb = wait_for_message(msg_type=Image, topic=self.image_topic, node=self, time_to_wait=5)
-				raw_img = self.bridge.imgmsg_to_cv2(rgb, self.raw_encoding)
-
+				(res, rgb) = wait_for_message(msg_type=Image, topic=self.image_topic, node=self, time_to_wait=5)
+				self.get_logger().debug("Received image {}: {}, encoding: {}".format(self.frame_cnt, res, rgb._encoding if rgb is not None else None))
+				if res:
+					raw_img = self.bridge.imgmsg_to_cv2(rgb, self.raw_encoding)
+		
 			if raw_img is not None:
 				self.get_logger().debug("Processing frame {}".format(self.frame_cnt))
 				(marker_det, det_img, proc_img) = self.det.detMarkerPoses(raw_img.copy(), vis=(vis if (i >= self.filter_iters-1 and self.vis) else False))
