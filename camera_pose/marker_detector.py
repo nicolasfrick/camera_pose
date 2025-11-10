@@ -56,6 +56,8 @@ class MarkerDetectorBase():
 	RED = (0,0,255)
 	GREEN = (0,255,0)
 	BLUE = (255,0,0)
+	BLACK = (0,0,0)
+	WHITE = (255,255,255)
 	AXIS_LENGTH = 1.5
 	AXIS_THICKNESS = 2
 	CIRCLE_SIZE = 3

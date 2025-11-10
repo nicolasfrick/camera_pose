@@ -21,6 +21,7 @@ def launch_setup(context, *args, **kwargs):
 	markers_camera_name = LaunchConfiguration('markers_camera_name', default='').perform(context)
 	image_topic = LaunchConfiguration('image_topic').perform(context) if not markers_camera_name and not bagfile else f'/{markers_camera_name if markers_camera_name else "camera"}/camera/color/image_raw'
 	camera_info_topic = LaunchConfiguration('camera_info_topic').perform(context) if not markers_camera_name and not bagfile else f'/{markers_camera_name if markers_camera_name else "camera"}/camera/color/camera_info'
+	serial_no = LaunchConfiguration('serial_no', default='').perform(context)
 
 	# realsense
 	if markers_camera_name != "" and bagfile == "":
@@ -33,8 +34,8 @@ def launch_setup(context, *args, **kwargs):
 					get_package_share_directory('realsense2_camera'),
 					'/launch/rs_launch.py'
 				]),
-				launch_arguments={'camera': markers_camera_name,
-								'serial_no': LaunchConfiguration('serial_no'),
+				launch_arguments={'camera_name': markers_camera_name,
+								'serial_no': serial_no,
 								'publish_tf': LaunchConfiguration('publish_tf'),
 								'enable_color': LaunchConfiguration('enable_color'),
 								'enable_depth': LaunchConfiguration('enable_depth'),
@@ -73,7 +74,7 @@ def launch_setup(context, *args, **kwargs):
 				executable='rqt_image_view',
 				name='rqt_image_view_camera_pose',
 				namespace='',
-				arguments=[image_topic],
+				arguments=["/camera_pose_detections"],
 				output='screen',
 			),
 		)
@@ -83,14 +84,13 @@ def launch_setup(context, *args, **kwargs):
 		Node(
 			package='camera_pose',
 			executable='camera_pose_node',
-			name='camera_pose',
+			name=f'camera_pose{"_" + serial_no if serial_no else ""}',
 			namespace='',
 			parameters=[{
 				'camera_ns': LaunchConfiguration('camera_ns'),
 				'image_topic': image_topic,
 				'camera_info_topic': camera_info_topic,
-				'marker_poses_file': LaunchConfiguration('marker_poses_file'),
-				'camera_pose_file': LaunchConfiguration('camera_pose_file'),
+				'camera_marker_poses_file': LaunchConfiguration('camera_marker_poses_file'),
 				'use_reconfigure': LaunchConfiguration('use_reconfigure'),
 				'marker_length': LaunchConfiguration('marker_length'),
 				'vis': LaunchConfiguration('vis'),
@@ -148,7 +148,7 @@ def generate_launch_description():
 			),
 			DeclareLaunchArgument(
 				"f_ctrl",
-				default_value="10.0",
+				default_value="60.0",
 				description=''
 			) ,
 			DeclareLaunchArgument(
@@ -182,18 +182,13 @@ def generate_launch_description():
 				description=''
 			), 
 			DeclareLaunchArgument(
-				"marker_poses_file",
-				default_value="",
-				description=''
-			) ,
-			DeclareLaunchArgument(
-				"camera_pose_file",
+				"camera_marker_poses_file",
 				default_value="",
 				description=''
 			) ,
 			DeclareLaunchArgument(
 				"err_term",
-				default_value="2.0",
+				default_value="5.0",
 				description=''
 			),
 			# detector params

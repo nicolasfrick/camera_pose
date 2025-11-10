@@ -1,0 +1,67 @@
+# global CS origin
+root:
+  rpy: [0, 0, 0]
+  xyz: [0, 0, 0]
+
+# camera pose estimation result
+# if not null, the camera pose estimation step is skipped
+# assuming the correct camera pose wrt. root is present
+camera_pose:
+  xyz: null
+  rpy: null
+
+# marker transformations wrt. root for the camera pose detection
+camera_pose_marker:
+  0:
+    rpy: &euler [0, 0, 0]
+    xyz: [0.520, 0, 0.240]
+
+  1:
+    rpy: *euler
+    xyz: [0.550, 0.030, 0.340]
+
+  2:
+    rpy: *euler
+    xyz: [0.550, -0.030, 0.340]
+
+  3:
+    rpy: *euler
+    xyz: [0, 0, 0]
+
+# marker transformation results wrt. root using the known camera pose 
+# if not null, the entries are used to transform the marker pose results further
+target-1_marker:
+  10:
+    rpy: &euler_target1 [0, 0, 0]
+    xyz: [0, 0, 0]
+
+  11:
+    rpy: *euler_target1
+    xyz: [0, 0, 0]
+
+  12:
+    rpy: *euler_target1
+    xyz: [0, 0, 0]
+
+  13:
+    rpy: *euler_target1
+    xyz: [0, 0, 0]
+
+# marker transformation results wrt. root using the known camera pose 
+# if not null, the entries are used to transform the marker pose results further
+target-2_marker:
+  20:
+    rpy: &euler_target2 [0, 0, 0]
+    xyz: [0, 0, 0]
+
+  21:
+    rpy: *euler_target2
+    xyz: [0, 0, 0]
+
+  22:
+    rpy: *euler_target2
+    xyz: [0, 0, 0]
+
+  23:
+    rpy: *euler_target2
+    xyz: [0, 0, 0]

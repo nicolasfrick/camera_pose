@@ -15,7 +15,7 @@ from sensor_msgs.msg import Image, CameraInfo
 from rcl_interfaces.msg import SetParametersResult
 from ament_index_python.packages import get_package_share_directory
 from rclpy.wait_for_message import wait_for_message
-from typing import Optional, Any, Tuple, Union
+from typing import Optional, Any, Tuple, Union, List
 
 from .util import *
 from .pose_filter import *
@@ -44,7 +44,7 @@ class DetectBase(Node):
 
 	"""
 
-	FONT_THCKNS = 1
+	FONT_THCKNS = 1.5
 	FONT_SCALE = 0.7
 	FONT_CLR =  (0,0,0)
 	TXT_OFFSET = 30
@@ -314,17 +314,13 @@ class CameraPoseDetect(DetectBase):
 		self.declare_parameter('rotational_bounds_low', 3*[-np.pi])
 		self.declare_parameter('cartesian_bounds_high', 3*[np.pi])
 		self.declare_parameter('rotational_bounds_high', 3*[np.pi])
-		self.declare_parameter('camera_pose_file', '')
-		self.declare_parameter('marker_poses_file', '')
-	
+		self.declare_parameter('camera_marker_poses_file', '')
+
+		# estimation params
 		self.err_term = self.get_parameter('err_term').get_parameter_value().double_value
-		self.camera_pose_file = self.get_parameter('camera_pose_file').get_parameter_value().string_value
-		if not self.camera_pose_file:
-			self.camera_pose_file = os.path.join(self.pwd, 'config/camera_pose.yaml')
-		self.marker_poses_file = self.get_parameter('marker_poses_file').get_parameter_value().string_value
-		if not self.marker_poses_file:
-			self.marker_poses_file = os.path.join(self.pwd, 'config/marker_poses.yaml')
-		
+		self.camera_marker_poses_file = self.get_parameter('camera_marker_poses_file').get_parameter_value().string_value
+		if not self.camera_marker_poses_file:
+			self.camera_marker_poses_file = os.path.join(self.pwd, 'config/camera_marker_poses.yaml')
 		# optimization bounds
 		cartesian_lower_bounds = self.get_parameter('cartesian_bounds_low').get_parameter_value().double_array_value.tolist()
 		cartesian_upper_bounds = self.get_parameter('cartesian_bounds_high').get_parameter_value().double_array_value.tolist()
@@ -337,8 +333,39 @@ class CameraPoseDetect(DetectBase):
 		self.init = False
 		self.success = False
 		self.reprojection_errors = {}
+		self.camera_pose = {}
 		self.est_camera_pose = np.zeros(6)
+		self.target_poses = {}
+		self.est_target_pose = np.zeros(6)
+		self.result_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'results/results.yaml')
 
+		self.print_dbg()
+
+		# load config file
+		with open(self.camera_marker_poses_file, 'r') as fr:
+			self.camera_marker_poses_config = yaml.safe_load(fr)
+			# set marker and camera pose config
+			self.load_pose_config()
+
+		self.get_logger().info("Running camera_pose node")
+	
+	@property
+	def has_result(self) -> bool:
+		return self.success
+	@property
+	def cam_trans(self) -> Union[None, np.ndarray]:
+		return self.camera_pose[:3] if self.success else None
+	@property
+	def cam_rot_ext_xyz_euler(self) -> Union[None, np.ndarray]:
+		return self.camera_pose[3:] if self.success else None
+	@property
+	def cam_rot_ext_xyz_quat(self) -> Union[None, np.ndarray]:
+		return getRotation(self.camera_pose[3:], RotTypes.EULER, RotTypes.QUAT) if self.success else None
+	@property
+	def cam_rot_ext_xyz_mat(self) -> Union[None, np.ndarray]:
+		return getRotation(self.camera_pose[3:], RotTypes.EULER, RotTypes.MAT) if self.success else None
+
+	def print_dbg(self) -> None:
 		dbg_msg = f"camera_ns='{self.camera_ns}'" \
 				  + f"\nimage_topic='{self.image_topic}'" \
 				  + f"\ncamera_info_topic='{self.camera_info_topic}'" \
@@ -356,76 +383,97 @@ class CameraPoseDetect(DetectBase):
 				  + f"\nD={self.rgb_info.d}" \
 				  + f"\ndebug={self.debug}" \
 				  + f"\nerr_term={self.err_term}" \
-				  + f"\ncamera_pose_file={self.camera_pose_file}" \
-				  + f"\nmarker_poses_file={self.marker_poses_file}" \
+				  + f"\ncamera_marker_poses_file={self.camera_marker_poses_file}" \
 				  + f"\nlower_bounds={self.lower_bounds}" \
-				  + f"\nupper_bounds={self.upper_bounds}"
+				  + f"\nupper_bounds={self.upper_bounds}" \
+				  + f"\nresult_file={self.result_file}"
 		
 		self.get_logger().debug(dbg_msg)
 
-		# load camera poses
-		with open(self.camera_pose_file, 'r') as fr:
-			self.camera_pose = yaml.safe_load(fr)
+	def load_pose_config(self) -> None:
+		# check root pose
+		self.root_pose = self.camera_marker_poses_config['root']
+		if self.root_pose.get('xyz') is None:
+			self.root_pose['xyz'] = [0.0, 0.0, 0.0]
+			self.get_logger().warning("Setting root translation to zero!")
+		if self.root_pose.get('rpy') is None:
+			self.root_pose['rpy'] = [0.0, 0.0, 0.0]
+			self.get_logger().warning("Setting root rotation to zero!")
 
-		# load marker poses
-		with open(self.marker_poses_file, 'r') as fr:
-			self.marker_poses = yaml.safe_load(fr)
+		# check camera pose
+		self.camera_pose = self.camera_marker_poses_config['camera_pose']
+		if self.camera_pose.get('xyz') is None or self.camera_pose.get('rpy') is None:
+			self.camera_pose = {}
+			self.get_logger().info("No camera pose is given. Running camera pose estimation.")
 
-		self.get_logger().info("Running camera_pose node")
+		# check marker poses
+		self.marker_poses = self.camera_marker_poses_config['camera_pose_marker']
+		if not self.camera_pose:
+			assert self.marker_poses and isinstance(self.marker_poses, dict) # at least one marker pose is required for camera pose estimation
+		for k, v in self.marker_poses.items():
+			assert isinstance(k, int) # marker keys must be integers
+			assert v.get('xyz') is not None and v.get('rpy') is not None # marker poses require entries 'xyz' and 'rpy'
+			
+		# check for target poses
+		self.target_marker_poses = {}
+		for k, v in self.camera_marker_poses_config.items():
+			if 'target' in k:
+				for key, val in v.items():
+					if val.get('xyz') is not None and val.get('rpy') is not None:
+						self.get_logger().info(f"Found target marker set {k}. Performing marker pose transformation into target pose.")
+						self.target_marker_poses[k: v]
 	
-	@property
-	def has_result(self) -> bool:
-		return self.success
-	@property
-	def cam_trans(self) -> Union[None, np.ndarray]:
-		return self.est_camera_pose[:3] if self.success else None
-	@property
-	def cam_rot_ext_xyz_euler(self) -> Union[None, np.ndarray]:
-		return self.est_camera_pose[3:] if self.success else None
-	@property
-	def cam_rot_ext_xyz_quat(self) -> Union[None, np.ndarray]:
-		return getRotation(self.est_camera_pose[3:], RotTypes.EULER, RotTypes.QUAT) if self.success else None
-	@property
-	def cam_rot_ext_xyz_mat(self) -> Union[None, np.ndarray]:
-		return getRotation(self.est_camera_pose[3:], RotTypes.EULER, RotTypes.MAT) if self.success else None
-
-	def write_camera_pose_result(self) -> None:
+	def write_result(self) -> None:
 		if not self.success:
-			self.get_logger().warning("No valid camera pose to write!")
+			self.get_logger().warning("No result to write!")
 			return
 		
-		self.camera_pose['xyz'] = self.cam_trans.tolist()
-		self.camera_pose['rpy'] = self.cam_rot_ext_xyz_euler.tolist()
-		self.camera_pose['quat'] = self.cam_rot_ext_xyz_quat.tolist()
-		self.camera_pose['mat'] = self.cam_rot_ext_xyz_mat.tolist()
-		self.camera_pose['reprojection_error'] = self.err
+		result = {}
 
-		with open(self.camera_pose_file, 'w') as fw:
-			yaml.dump(self.camera_pose, fw)
+		# origin
+		result['root'] = self.root_pose
 
-	# def labelDetection(self, img: cv2.typing.MatLike, trans: np.ndarray, rot: np.ndarray, corners: np.ndarray) -> None:
-	# 		pos_txt = "X: {:.4f} Y:  {:.4f} Z:  {:.4f}".format(trans[0], trans[1], trans[2])
-	# 		ori_txt = "R: {:.4f} P:  {:.4f} Y:  {:.4f}".format(rot[0], rot[1], rot[2])
-	# 		x_max = int(np.max(corners[:, 0]))
-	# 		y_max = int(np.max(corners[:, 1]))
-	# 		y_min = int(np.min(corners[:, 1]))
-	# 		x_offset = 0 if x_max <= img.shape[1]/2 else -int(len(pos_txt)*20*self.FONT_SCALE)
-	# 		y_offset1 = self.TXT_OFFSET if y_max <= img.shape[0]/2 else -self.TXT_OFFSET-(y_max-y_min)
-	# 		y_offset2 = y_offset1 + int(self.FONT_SCALE*50) if y_offset1 > 0 else y_offset1 - int(self.FONT_SCALE*50)
-	# 		cv2.putText(img, pos_txt, (x_max+x_offset, y_max+(y_offset1 if y_offset1 > 0 else y_offset2)), cv2.FONT_HERSHEY_SIMPLEX, self.FONT_SCALE, self.FONT_CLR, self.FONT_THCKNS, cv2.LINE_AA)
-	# 		cv2.putText(img, ori_txt, (x_max+x_offset, y_max+(y_offset2 if y_offset1 > 0 else y_offset1)), cv2.FONT_HERSHEY_SIMPLEX, self.FONT_SCALE, self.FONT_CLR, self.FONT_THCKNS, cv2.LINE_AA)
+		# camera pose
+		result['xyz'] = self.cam_trans.tolist()
+		result['rpy'] = self.cam_rot_ext_xyz_euler.tolist()
+		result['quat'] = self.cam_rot_ext_xyz_quat.tolist()
+		result['mat'] = self.cam_rot_ext_xyz_mat.tolist()
+		result['reprojection_error'] = round(self.err, 6)
 
-	def labelDetection(self, img: cv2.typing.MatLike, id: int, trans: np.ndarray, rot: np.ndarray, err: Optional[Union[float, None]]=None) -> None:
+		# target poses
+		result['target_poses'] = {}
+		for k, v in self.target_poses.items():
+			result['target_poses'][k] = {
+										 'xyz': v[:3].tolist(),
+										 'rpy': v[3:].tolist(),
+										 'quat': getRotation(v[3:], RotTypes.EULER, RotTypes.QUAT).tolist(),
+										 'mat': getRotation(v[3:], RotTypes.EULER, RotTypes.MAT).tolist(),
+										}
+
+		with open(self.result_file, 'w') as fw:
+			yaml.dump(result, fw)
+
+	def labelDetection(self, 
+					   img: cv2.typing.MatLike, 
+					   id: int, 
+					   trans: np.ndarray, 
+					   rot: np.ndarray, 
+					   err: Optional[Union[float, None]]=None, 
+					   emphasize_marker_ids: Optional[List[int]]=[],
+					   ) -> None:
 		if id > -1:
-			repr_error = self.reprojection_errors.get(id)
-			if repr_error is None:
-				repr_error = -1.0
-			pos_txt = "{} X: {:.4f} Y: {:.4f} Z: {:.4f} R: {:.4f} P: {:.4f} Y: {:.4f}, err {:.2f}".format(id, trans[0], trans[1], trans[2], rot[0], rot[1], rot[2], repr_error)
-			xpos = self.TXT_OFFSET
-			ypos = (id+1)*self.TXT_OFFSET
-			cv2.putText(img, pos_txt, (xpos, ypos), cv2.FONT_HERSHEY_SIMPLEX, self.FONT_SCALE, self.det.RED, self.FONT_THCKNS, cv2.LINE_AA)
+			# label marker
+			if emphasize_marker_ids is not None and id in emphasize_marker_ids:
+				repr_error = self.reprojection_errors.get(id)
+				if repr_error is None:
+					repr_error = -1.0
+				pos_txt = "{} X: {:.4f} Y: {:.4f} Z: {:.4f} R: {:.4f} P: {:.4f} Y: {:.4f}, err {:.2f}".format(id, trans[0], trans[1], trans[2], rot[0], rot[1], rot[2], repr_error)
+				xpos = self.TXT_OFFSET
+				ypos = (id+1)*self.TXT_OFFSET
+				cv2.putText(img, pos_txt, (xpos, ypos), cv2.FONT_HERSHEY_SIMPLEX, self.FONT_SCALE, self.det.RED, self.FONT_THCKNS, cv2.LINE_AA)
 		else:
-			xpos = self.TXT_OFFSET
+			# label camera pose estimate
+			xpos = img.shape[0] - self.TXT_OFFSET
 			ypos = self.CAM_LABEL_YPOS*self.TXT_OFFSET
 			cv2.putText(img, "CAMERA", (xpos, ypos), cv2.FONT_HERSHEY_SIMPLEX, self.FONT_SCALE, self.det.GREEN, self.FONT_THCKNS, cv2.LINE_AA)
 			cv2.putText(img, "X {:.4f}".format(trans[0]), (xpos, ypos+2*self.TXT_OFFSET), cv2.FONT_HERSHEY_SIMPLEX, self.FONT_SCALE, self.det.GREEN, self.FONT_THCKNS, cv2.LINE_AA)
@@ -441,10 +489,7 @@ class CameraPoseDetect(DetectBase):
 		error = np.linalg.norm(det_corners - proj_corners, axis=1)
 		return np.mean(error)
 	
-	def projectSingleMarker(self, detection:dict, id: int, camera_pose: np.ndarray, img: cv2.typing.MatLike=None) -> float:
-		if self.marker_poses.get(id) is None:
-			self.get_logger().warning(f"id {id} not present in marker poses!")
-			return np.inf
+	def projectSingleMarker(self, detection:dict, id: int, camera_pose: np.ndarray, img: Optional[Union[None, cv2.typing.MatLike]]=None, emphasize: Optional[bool]=False) -> float:
 		# tf marker corners wrt. world
 		T_world_marker = self.getWorldMarkerTF(id)
 		world_corners = self.tagWorldCorners(T_world_marker, self.det.square_points)
@@ -452,21 +497,25 @@ class CameraPoseDetect(DetectBase):
 		projected_corners, _ = cv2.projectPoints(world_corners, camera_pose[:3, :3], camera_pose[:3, 3], self.det.cmx, self.det.dist)
 		projected_corners = np.int32(projected_corners).reshape(-1, 2)
 		if img is not None:
-			cv2.polylines(img, [projected_corners], isClosed=True, color=self.det.BLUE, thickness=2)
-			cv2.putText(img, str(id), (projected_corners[0][0]+5, projected_corners[0][1]+5), cv2.FONT_HERSHEY_SIMPLEX, self.FONT_SCALE, self.FONT_CLR, self.FONT_THCKNS, cv2.LINE_AA)
+			cv2.polylines(img, [projected_corners], isClosed=True, color=self.det.BLUE if emphasize else self.det.RED, thickness=2 if emphasize else 1)
+			cv2.putText(img, str(id), (projected_corners[0][0]+5, projected_corners[0][1]+5), cv2.FONT_HERSHEY_SIMPLEX, self.FONT_SCALE if emphasize else self.FONT_SCALE/2, self.det.BLACK if emphasize else self.det.WHITE, self.FONT_THCKNS, cv2.LINE_AA)
 		return self.reprojectionError(detection['corners'], projected_corners)
 	
-	def projectMarkers(self, detection:dict, camera_pose: np.ndarray, img: cv2.typing.MatLike=None) -> list:
+	def projectMarkers(self, detection:dict, camera_pose: np.ndarray, img: cv2.typing.MatLike=None, emphasize_marker_ids: Optional[List[int]]=[]) -> list:
 		err = []
 		# invert world to camera tf for reprojection
 		tvec_inv, euler_inv = invPersp(tvec=camera_pose[:3], rot=camera_pose[3:], rot_t=RotTypes.EULER)
 		T_cam_world = pose2Matrix(tvec_inv, euler_inv, RotTypes.EULER)
 		# iter measured markers
 		for id, det in detection.items():
-			# reprojection error
-			e = self.projectSingleMarker(det, id, T_cam_world, img)
-			self.reprojection_errors.update({id: e})
-			err.append(e)
+			# consider only relevant ids
+			if id in emphasize_marker_ids:
+				# get reprojection error
+				e = self.projectSingleMarker(det, id, T_cam_world, img, True)
+				self.reprojection_errors.update({id: e})
+				err.append(e)
+			else:
+				self.projectSingleMarker(det, id, T_cam_world, img)
 		return err
 	
 	def tagWorldCorners(self, world_tag_tf: np.ndarray, tag_corners: np.ndarray) -> np.ndarray:
@@ -548,7 +597,7 @@ class CameraPoseDetect(DetectBase):
 				error.append(orientation_error)		
 
 				# reprojection_error
-				# repr_err = self.projectSingleMarker(det, id, T_camera_world)
+				# repr_err = self.projectSingleMarker(det, id, T_camera_world, True)
 				# error.append(repr_err)
 
 		return np.hstack(error) if len(error) else np.array(error)
@@ -569,7 +618,7 @@ class CameraPoseDetect(DetectBase):
 			if res.success:
 				opt_cam_pose = res.x
 				# reproject markers
-				errors = self.projectMarkers(detection, opt_cam_pose, img)
+				errors = self.projectMarkers(detection, opt_cam_pose, img, list(self.marker_poses.keys()))
 				reserr = np.mean(errors) if len(errors) else np.inf
 				self.get_logger().info(
 					f"Result: {res.status} {res.message}\n"
@@ -582,7 +631,7 @@ class CameraPoseDetect(DetectBase):
 
 				for id, error in self.reprojection_errors.items():
 					if error > self.err_term:
-						self.get_logger().warning(f"id {id} reprojection error: {error:.2f} > {self.err_term} threshold")
+						self.get_logger().info(f"id {id} reprojection error: {error:.2f} > {self.err_term} threshold")
 
 				# put pose label
 				self.labelDetection(img, -1, opt_cam_pose[:3], opt_cam_pose[3:], reserr)
@@ -615,51 +664,75 @@ class CameraPoseDetect(DetectBase):
 		if filter is not None:
 			filtered_pose[:3] = filter.est_translation
 			filtered_pose[3:] = filter.est_rotation_as_euler
-			self.labelDetection(img, 30, filtered_pose[:3], filtered_pose[3:])
+			self.labelDetection(img, -1, filtered_pose[:3], filtered_pose[3:])
 			err = self.projectMarkers(detection, filtered_pose, img)
 			self.get_logger().info(f"camera world pose trans: {filtered_pose[:3]}, rot (extr. xyz euler): {filtered_pose[3:]}")
 		
 		return err, filtered_pose
-		
+	
+	def estimateCameraPose(self, det_img: cv2.typing.MatLike, marker_det: dict) -> Tuple[bool, list]:
+		initial_guess = self.est_camera_pose if self.init else self.initialGuess(marker_det)
+		self.init = True
+		success = False
+
+		self.get_logger().info("Running estimation")
+		(self.err, self.est_camera_pose) = self.estimatePoseLS(det_img, self.err, initial_guess, marker_det)
+
+		if self.err <= self.err_term:
+			self.camera_pose = self.est_camera_pose
+			self.get_logger().info(f"Pose estimation terminated.\nEstimated camera pose xyz (m): {self.camera_pose[:3]},\nextr. xyz Euler angles (rad): {self.camera_pose[3:]},\nmean reprojection error: {round(self.err, 6)}")
+			success = True
+
+		return success, list(self.marker_poses.keys())
+	
+	def estimateTargetPose(self, det_img: cv2.typing.MatLike, marker_det: dict) -> Tuple[bool, list]:
+		target_key = list(self.target_marker_poses.keys())[0]
+		target_val = list(self.target_marker_poses.values())[0]
+
 	def run(self) -> None:
-		# try:
+		try:
+			res = False
+			emphasize_marker_ids = []
+
 			# detect markers 
 			(marker_det, det_img, proc_img, raw_img) = self.preProcImage()
-
-			# initially show 
+			# initially show raw and preprocessed images
 			if self.vis:
 				self.show_images(None, proc_img, raw_img, 1 if self.init else 10000)
 
-			# estimate cam pose
+			# process detection
 			if marker_det is not None and det_img is not None:
-				initial_guess = self.est_camera_pose if self.init else self.initialGuess(marker_det)
-				self.init = True
+				if not self.camera_pose:
+					# task: estimate cam pose
+					(res, emphasize_marker_ids) = self.estimateCameraPose(det_img, marker_det)
+				elif self.target_marker_poses:
+					# task: compute target poses
+					(res, emphasize_marker_ids) = self.estimateTargetPose(det_img, marker_det)
+			
+			# set the result if all tasks are complete
+			if res and self.camera_pose and not self.target_marker_poses:
+				self.success = True
+				self.write_result()
 
-				self.get_logger().info("Running estimation")
-				(self.err, self.est_camera_pose) = self.estimatePoseLS(det_img, self.err, initial_guess, marker_det)
-
-				if self.err <= self.err_term:
-					self.success = True
-					self.write_camera_pose_result()
-					self.get_logger().info(f"Pose estimation terminated.\nEstimated camera pose xyz (m): {self.est_camera_pose[:3]},\nextr. xyz Euler angles (rad): {self.est_camera_pose[3:]}, mean reprojection error: {self.err}")
-
+			# show detections and estimates
 			if self.vis and det_img is not None:
-				# frame counter
+				# put frame counter
 				cv2.putText(det_img, str(self.frame_cnt), (det_img.shape[1]-40, 20), cv2.FONT_HERSHEY_SIMPLEX, self.FONT_SCALE, self.FONT_CLR, self.FONT_THCKNS, cv2.LINE_AA)
 				
 				if marker_det is not None:
 					# label marker pose
 					for id, det in marker_det.items():
-						self.labelDetection(det_img, id, det['ftrans'], det['frot'])
-
+						self.labelDetection(det_img, id, det['ftrans'], det['frot'], emphasize_marker_ids=emphasize_marker_ids)
 					self.show_images(det_img, None, None, 100000 if self.success else 1)
 			
+			# terminate after showing result
 			if self.success:
+				self.get_logger().info("All tasks done. Terminating ...")
 				rclpy.shutdown()
 
-		# except Exception as e:
-		# 	self.get_logger().error(f"Error occurred in run: {e}")
-		# 	rclpy.shutdown()
+		except Exception as e:
+			self.get_logger().error(f"Error occurred in run: {e}")
+			rclpy.shutdown()
 
 def main():
 	rclpy.init()
