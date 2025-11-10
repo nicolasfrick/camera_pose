@@ -1,4 +1,5 @@
 # global CS origin
+# applies only to 'camera_pose_marker'
 root:
   rpy: [0, 0, 0]
   xyz: [0, 0, 0]
@@ -11,6 +12,7 @@ camera_pose:
   rpy: null
 
 # marker transformations wrt. root for the camera pose detection
+# required if camera_pose is null
 camera_pose_marker:
   0:
     rpy: &euler [0, 0, 0]
@@ -24,12 +26,10 @@ camera_pose_marker:
     rpy: *euler
     xyz: [0.550, -0.030, 0.340]
 
-  3:
-    rpy: *euler
-    xyz: [0, 0, 0]
-
 # marker transformation results wrt. root using the known camera pose 
-# if not null, the entries are used to transform the marker pose results further
+# the entries are used to transform the marker pose results into a target frame
+# if an entry is null, only the marker transformation will be estimated
+# the 'root' transformation is not applicable here, use absolute values
 target-1_marker:
   10:
     rpy: &euler_target1 [0, 0, 0]
@@ -39,29 +39,12 @@ target-1_marker:
     rpy: *euler_target1
     xyz: [0, 0, 0]
 
-  12:
-    rpy: *euler_target1
-    xyz: [0, 0, 0]
-
-  13:
-    rpy: *euler_target1
-    xyz: [0, 0, 0]
-
-# marker transformation results wrt. root using the known camera pose 
-# if not null, the entries are used to transform the marker pose results further
+# 2nd target
 target-2_marker:
   20:
     rpy: &euler_target2 [0, 0, 0]
     xyz: [0, 0, 0]
 
   21:
-    rpy: *euler_target2
-    xyz: [0, 0, 0]
-
-  22:
-    rpy: *euler_target2
-    xyz: [0, 0, 0]
-
-  23:
     rpy: *euler_target2
     xyz: [0, 0, 0]

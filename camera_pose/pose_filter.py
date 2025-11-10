@@ -6,7 +6,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 from enum import Enum
-from typing import Tuple, Optional, Union
+from typing import Tuple, Optional, Union, List
 from scipy.spatial.transform import Rotation as R
 
 from .util import *
@@ -57,7 +57,7 @@ class PoseFilterBase():
 		return self.translation_estimated, self.rotation_estimated
 	
 	@classmethod
-	def poseToMeasurement(self, tvec: np.ndarray, rot: np.ndarray, rot_t: RotTypes) -> np.ndarray:
+	def poseToMeasurement(cls, tvec: np.ndarray, rot: np.ndarray, rot_t: RotTypes) -> np.ndarray:
 		"""Convert pose vectors to filter input.
 
 			@param tvec Translation vector
@@ -292,12 +292,13 @@ class PoseFilterKalman(PoseFilterBase):
 		return self.translation_estimated, self.rotation_estimated
 	
 def createFilter(filter_type: Union[FilterTypes, str], 
-				init_state: Optional[Tuple[float, float, float, float, float, float]]=6*[0],
-				dt_kalman: Optional[float]=0.1,
-				process_noise_kalman: Optional[float]=1e-10, 
-				measurement_noise_kalman: Optional[float]=1e-10, 
-				error_post_kalman: Optional[float]=0.0
+				 init_state: Optional[List[float]]=6*[0.0],
+				 dt_kalman: Optional[float]=0.1,
+				 process_noise_kalman: Optional[float]=1e-10, 
+				 measurement_noise_kalman: Optional[float]=1e-10, 
+				 error_post_kalman: Optional[float]=0.0
 				) -> Union[PoseFilterMean, PoseFilterKalman, PoseFilterBase]:
+	
 	ft = filter_type if isinstance(filter_type, FilterTypes) else FILTER_TYPES_MAP[filter_type]
 	if ft in [FilterTypes.MEAN, FilterTypes.MEDIAN]:
 		return PoseFilterMean(state_init=init_state, 
