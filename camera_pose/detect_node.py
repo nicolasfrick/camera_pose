@@ -44,7 +44,7 @@ class DetectBase(Node):
 
 	"""
 
-	FONT_THCKNS = 1.5
+	FONT_THCKNS = 2
 	FONT_SCALE = 0.7
 	FONT_CLR =  (0,0,0)
 	TXT_OFFSET = 30
@@ -68,7 +68,10 @@ class DetectBase(Node):
 		self.declare_parameter('fps', 30.0)
 		self.declare_parameter('f_ctrl', 30.0)
 		self.declare_parameter('filter_iters', 10)
-		self.declare_parameter('marker_length', 0.010)
+		self.declare_parameter('marker_family', 'tag16h5')
+		self.declare_parameter('cam_pose_marker_length', 0.010)
+		self.declare_parameter('target_pose_marker_length', -1.0)
+
 		self.declare_parameter('filter_type', 'none')  # 'none' | 'median' | 'mean'
 
 		self.camera_ns = self.get_parameter('camera_ns').get_parameter_value().string_value.lstrip('/')
@@ -85,13 +88,17 @@ class DetectBase(Node):
 
 		self.fps = self.get_parameter('fps').get_parameter_value().double_value
 		self.f_loop = self.get_parameter('f_ctrl').get_parameter_value().double_value
-		self.marker_length = self.get_parameter('marker_length').get_parameter_value().double_value
+		self.marker_family = self.get_parameter('marker_family').get_parameter_value().string_value
+		self.cam_pose_marker_length = self.get_parameter('cam_pose_marker_length').get_parameter_value().double_value
+		self.target_pose_marker_length = self.get_parameter('target_pose_marker_length').get_parameter_value().double_value
 		self.filter_type = self.get_parameter('filter_type').get_parameter_value().string_value
 		self.filter_iters = self.get_parameter('filter_iters').get_parameter_value().integer_value
 		self.filter_iters = self.filter_iters if (self.filter_type != 'none' and self.filter_iters > 0) else 1
+		if self.target_pose_marker_length < 0.0:
+			self.target_pose_marker_length = self.cam_pose_marker_length
 
+		self.det = None
 		self.frame_cnt = 0
-
 		self.pwd = get_package_share_directory('camera_pose')
 
 		# dummies
@@ -104,7 +111,7 @@ class DetectBase(Node):
 		if not self.test:
 			self.img = None
 			self.get_logger().info(f"Waiting for camera_info from {self.camera_info_topic}")
-			(success, self.rgb_info) = wait_for_message(msg_type=CameraInfo, node=self, topic=self.camera_info_topic, time_to_wait=25)
+			(success, self.rgb_info) = wait_for_message(msg_type=CameraInfo, node=self, topic=self.camera_info_topic, time_to_wait=600) # wait 10 mins
 			if success:
 				self.get_logger().info(f"Camera info received. Camera height: {self.rgb_info.height}, width: {self.rgb_info.width}")
 			else:
@@ -112,15 +119,7 @@ class DetectBase(Node):
 				rclpy.shutdown()
 
 		# init detector
-		self.det = AprilDetector(marker_length=self.marker_length, 
-								 K=self.rgb_info.k, 
-								 D=self.rgb_info.d,
-								 dt=1/self.fps,
-								 invert_pose=False,
-								 filter_type=self.filter_type,
-								 pwd=self.pwd,
-								 log_info_fn=self.get_logger().info,
-								 )
+		self.createDetector(self.cam_pose_marker_length)
 			
 		# init vis	
 		if self.vis:
@@ -140,9 +139,28 @@ class DetectBase(Node):
 		self.timer = self.create_timer(1/self.f_loop, self.run)
 
 	def clean(self) -> None:
+		# remove detector
+		if self.det is not None:
+			del self.det
+		# close open cv windows
 		if self.cv_window:
 			cv2.destroyAllWindows()
 
+	def createDetector(self, marker_length: float) -> None:
+		if self.det is not None:
+			del self.det
+
+		self.det = AprilDetector(marker_length=marker_length, 
+								 K=self.rgb_info.k, 
+								 D=self.rgb_info.d,
+								 dt=1/self.fps,
+								 invert_pose=False,
+								 filter_type=self.filter_type,
+								 pwd=self.pwd,
+								 log_info_fn=self.get_logger().info,
+								 marker_family=self.marker_family,
+								 )
+		
 	def flipOutliers(self, marker_detections: dict, tolerance: float=0.5, exclude_ids: list=[6,7,8,9], normal_type: NormalTypes=NormalTypes.XZ) -> bool:
 		"""Check if all Z axes are oriented similarly and 
 			  flip orientation for outliers. 
@@ -227,10 +245,13 @@ class DetectBase(Node):
 			if not self.test:
 				# real image
 				self.get_logger().debug("Waiting for image message {}".format(self.frame_cnt))
-				(res, rgb) = wait_for_message(msg_type=Image, topic=self.image_topic, node=self, time_to_wait=5)
+				(res, rgb) = wait_for_message(msg_type=Image, topic=self.image_topic, node=self, time_to_wait=600) # wait 10 mins
 				self.get_logger().debug("Received image {}: {}, encoding: {}".format(self.frame_cnt, res, rgb._encoding if rgb is not None else None))
 				if res:
 					raw_img = self.bridge.imgmsg_to_cv2(rgb, self.raw_encoding)
+				else:
+					self.get_logger().error("Waiting time for image message exceeded. Shutdown ...")
+					rclpy.shutdown()
 		
 			if raw_img is not None:
 				self.get_logger().debug("Processing frame {}".format(self.frame_cnt))
@@ -395,7 +416,8 @@ class CameraPoseDetect(DetectBase):
 				  + f"\nflip_outliers={self.flip_outliers}" \
 				  + f"\nfps={self.fps}" \
 				  + f"\nf_loop={self.f_loop}" \
-				  + f"\nmarker_length={self.marker_length}" \
+				  + f"\ncam_pose_marker_length={self.cam_pose_marker_length}" \
+				  + f"\ntarget_pose_marker_length={self.target_pose_marker_length}" \
 				  + f"\nfilter_type={self.filter_type}" \
 				  + f"\nfilter_iters={self.filter_iters}" \
 				  + f"\nK={self.rgb_info.k}" \
@@ -432,6 +454,7 @@ class CameraPoseDetect(DetectBase):
 		for k, v in self.marker_poses.items():
 			assert isinstance(k, int) # marker keys must be integers
 			assert v.get('xyz') is not None and v.get('rpy') is not None # marker poses require entries 'xyz' and 'rpy'
+		self.marker_poses_ids = list(self.marker_poses.keys())
 			
 		# check for target poses
 		self.target_marker_poses = {}
@@ -467,6 +490,37 @@ class CameraPoseDetect(DetectBase):
 		with open(self.result_file, 'w') as fw:
 			yaml.dump(result, fw)
 
+	def putTextToCorner(self, 
+					    id: int,
+						label_lines: list, 
+						img: cv2.typing.MatLike, 
+						px_margin: Optional[int]=50,
+						corner: Optional[str]='upleft',
+						line_type: Optional[int]=cv2.LINE_AA,
+						font: Optional[int]=cv2.FONT_HERSHEY_SIMPLEX,
+						scale: Optional[Union[float, None]]=None,
+						thckns: Optional[Union[int, None]]=None,
+						color: Optional[Union[tuple, None]]=None,
+						) -> None:
+		
+		height, width = img.shape[:2] 
+		line_height = int(30 * self.FONT_SCALE)
+		scale = self.FONT_SCALE if scale is None else scale
+		thckns = self.FONT_THCKNS if thckns is None else thckns
+		color = self.det.GREEN if color is None else color
+
+		pos_label_lines, xs = [], []
+		for i, line in enumerate(label_lines if 'up' in corner else reversed(label_lines)):
+			stack_idx = i if id < 0 else id + i
+			(tw, th), baseline = cv2.getTextSize(line, font, scale, thckns)
+			y = px_margin + stack_idx * (line_height + baseline) if 'up' in corner else height - px_margin - stack_idx * (line_height + baseline)
+			pos_label_lines.append( (line, y) )
+			xs.append(width - tw - px_margin)
+
+		x = px_margin if 'left' in corner else min(xs)
+		for line, y in pos_label_lines:
+			cv2.putText(img, line, (x, y), font, scale, color, thckns, line_type)
+
 	def labelDetection(self, 
 					   img: cv2.typing.MatLike, 
 					   id: int, 
@@ -475,37 +529,44 @@ class CameraPoseDetect(DetectBase):
 					   err: Optional[Union[float, None]]=None, 
 					   emphasize_marker_ids: Optional[List[int]]=[],
 					   ) -> None:
+		
+		label_lines = []
+		corner = 'upleft'
+		color = self.det.GREEN
+
 		if id > -1:
-			# label marker
+			# marker pose labels
 			if emphasize_marker_ids is not None and id in emphasize_marker_ids:
-				repr_error = self.cam_reprojection_errors.get(id)
-				if repr_error is None:
-					repr_error = -1.0
-				pos_txt = "{} X: {:.4f} Y: {:.4f} Z: {:.4f} R: {:.4f} P: {:.4f} Y: {:.4f}, err {:.2f}".format(id, trans[0], trans[1], trans[2], rot[0], rot[1], rot[2], repr_error)
-				xpos = self.TXT_OFFSET
-				ypos = (id+1)*self.TXT_OFFSET
-				cv2.putText(img, pos_txt, (xpos, ypos), cv2.FONT_HERSHEY_SIMPLEX, self.FONT_SCALE, self.det.RED, self.FONT_THCKNS, cv2.LINE_AA)
+				repr_error = self.cam_reprojection_errors.get(id, -1.0)
+				txt = "{} X: {:.3f} Y: {:.3f} Z: {:.3f} R: {:.2f} P: {:.2f} Y: {:.2f}, err {:.2f}".format(id, trans[0], trans[1], trans[2], rot[0], rot[1], rot[2], repr_error)
+				label_lines.append(txt)
+			else:
+				color = self.det.RED
+				txt = "{} X: {:.3f} Y: {:.3f} Z: {:.3f} R: {:.2f} P: {:.2f} Y: {:.2f}".format(id, trans[0], trans[1], trans[2], rot[0], rot[1], rot[2])
+				label_lines.append(txt)
 		
 		elif id == -1:
-			# label camera pose estimate
-			xpos = img.shape[0] - self.TXT_OFFSET
-			ypos = self.CAM_LABEL_YPOS*self.TXT_OFFSET
-			cv2.putText(img, "CAMERA", (xpos, ypos), cv2.FONT_HERSHEY_SIMPLEX, self.FONT_SCALE, self.det.GREEN, self.FONT_THCKNS, cv2.LINE_AA)
-			cv2.putText(img, "X {:.4f}".format(trans[0]), (xpos, ypos+2*self.TXT_OFFSET), cv2.FONT_HERSHEY_SIMPLEX, self.FONT_SCALE, self.det.GREEN, self.FONT_THCKNS, cv2.LINE_AA)
-			cv2.putText(img, "Y {:.4f}".format(trans[1]), (xpos, ypos+3*self.TXT_OFFSET), cv2.FONT_HERSHEY_SIMPLEX, self.FONT_SCALE, self.det.GREEN, self.FONT_THCKNS, cv2.LINE_AA)
-			cv2.putText(img, "Z {:.4f}".format(trans[2]), (xpos, ypos+4*self.TXT_OFFSET), cv2.FONT_HERSHEY_SIMPLEX, self.FONT_SCALE, self.det.GREEN, self.FONT_THCKNS, cv2.LINE_AA)
-			cv2.putText(img, "roll {:.4f}".format(rot[0]), (xpos, ypos+5*self.TXT_OFFSET), cv2.FONT_HERSHEY_SIMPLEX, self.FONT_SCALE, self.det.GREEN, self.FONT_THCKNS, cv2.LINE_AA)
-			cv2.putText(img, "pitch {:.4f}".format(rot[1]), (xpos, ypos+6*self.TXT_OFFSET), cv2.FONT_HERSHEY_SIMPLEX, self.FONT_SCALE, self.det.GREEN, self.FONT_THCKNS, cv2.LINE_AA)
-			cv2.putText(img, "yaw {:.4f}".format(rot[2]), (xpos, ypos+7*self.TXT_OFFSET), cv2.FONT_HERSHEY_SIMPLEX, self.FONT_SCALE, self.det.GREEN, self.FONT_THCKNS, cv2.LINE_AA)
+			# camera pose label
+			corner = 'lowright'
+			label_lines.append("CAMERA POSE ESTIMATE")
+			label_lines.append("X {:.3f}".format(trans[0]))
+			label_lines.append("Y {:.3f}".format(trans[1]))
+			label_lines.append("Z {:.3f}".format(trans[2]))
+			label_lines.append("R {:.3f}".format(rot[0]))
+			label_lines.append("P {:.3f}".format(rot[1]))
+			label_lines.append("Y {:.3f}".format(rot[2]))
 			if err is not None and err is not np.inf:
-				cv2.putText(img, "mean reprojection error: {:.4f}".format(err), (xpos, ypos+8*self.TXT_OFFSET), cv2.FONT_HERSHEY_SIMPLEX, self.FONT_SCALE, self.det.GREEN, self.FONT_THCKNS, cv2.LINE_AA)
+				label_lines.append("mean reprojection error: {:.2f}".format(err))
 		
 		elif id == -2:
-			# label target pose estimate
-			xpos = img.shape[0]/2 - self.TXT_OFFSET
-			ypos = self.CAM_LABEL_YPOS*self.TXT_OFFSET
-			text = "Target estimation: X {:.2f} Y {:.2f} Z {:.2f} R {:.3f} P {:.3f} Y {:.3f}".format(trans[0], trans[1], trans[2], rot[0], rot[1], rot[2])
-			cv2.putText(img, text, (xpos, ypos), cv2.FONT_HERSHEY_SIMPLEX, self.FONT_SCALE/4, self.det.GREEN, self.FONT_THCKNS, cv2.LINE_AA)
+			# target marker pose label
+			corner = 'lowright'
+			label_lines.append("Target estimation")
+			label_lines.append("X {:.3f} Y {:.3f} Z {:.3f}".format(trans[0], trans[1], trans[2]))
+			label_lines.append("R {:.3f} P {:.3f} Y {:.3f}".format(rot[0], rot[1], rot[2]))
+
+		self.get_logger().debug(f"Labeling image: id {id}, label:\n{label_lines}\ntrans: {trans}, rot: {rot}\nemphasized: {emphasize_marker_ids is not None and id in emphasize_marker_ids}")
+		self.putTextToCorner(id, label_lines, img, corner=corner, color=color)
 
 	def reprojectionError(self, det_corners: np.ndarray, proj_corners: np.ndarray) -> float:
 		error = np.linalg.norm(det_corners - proj_corners, axis=1)
@@ -710,21 +771,34 @@ class CameraPoseDetect(DetectBase):
 		return err, filtered_pose
 	
 	def estimateCameraPose(self, det_img: cv2.typing.MatLike, marker_det: dict) -> Tuple[bool, list]:
+		if not marker_det:
+			return False, []
+		
 		initial_guess = self.est_camera_pose if self.init else self.initialGuess(marker_det)
 		self.init = True
 		success = False
+
+		if self.debug:
+			msg = ""
+			for id, res in marker_det.items():
+				msg += f"id: {id}\n"
+				for k, v in res.items():
+					msg += f"{k}: {v}\n"
+			self.get_logger().debug(f"Cam pose estimation input:\n{msg}")
 
 		self.get_logger().info("Running estimation")
 		(self.err, self.est_camera_pose) = self.estimateCamPoseLS(det_img, self.err, initial_guess, marker_det)
 
 		if self.err <= self.err_term:
+			success = True
 			self.camera_pose = self.est_camera_pose
 			tvec_inv, euler_inv = invPersp(tvec=self.camera_pose[:3], rot=self.camera_pose[3:], rot_t=RotTypes.EULER)
 			self.inv_camera_pose = np.array(tvec_inv + euler_inv, dtype=np.float32)
-			self.get_logger().info(f"Pose estimation terminated.\nEstimated camera pose xyz (m): {self.camera_pose[:3]},\nextr. xyz Euler angles (rad): {self.camera_pose[3:]},\nmean reprojection error: {round(self.err, 6)}")
-			success = True
+			self.get_logger().info(f"Camera pose estimation terminated.\nEstimated camera pose xyz (m): {self.camera_pose[:3]},\nextr. xyz Euler angles (rad): {self.camera_pose[3:]},\nmean reprojection error: {round(self.err, 3)}")
+		else:
+			self.get_logger().info(f"Camera pose estimation failed, mean reprojection error: {round(self.err, 3)} > threshold: {self.err_term}")
 
-		return success, list(self.marker_poses.keys())
+		return success, list(marker_det.keys())
 	
 	def estimateTargetPoseFL(self, img: cv2.typing.MatLike, target_poses: List[np.ndarray]) -> np.ndarray:
 		filter = None
@@ -740,7 +814,7 @@ class CameraPoseDetect(DetectBase):
 			filtered_pose[:3] = filter.est_translation
 			filtered_pose[3:] = filter.est_rotation_as_euler
 			self.labelDetection(img, -2, filtered_pose[:3], filtered_pose[3:])
-			cv2.drawFrameAxes(img, self.det.cmx, self.det.dist, getRotation(filtered_pose[3:], RotTypes.EULER, RotTypes.RVEC), filtered_pose[:3], self.marker_length*self.det.AXIS_LENGTH, self.det.AXIS_THICKNESS)
+			cv2.drawFrameAxes(img, self.det.cmx, self.det.dist, getRotation(filtered_pose[3:], RotTypes.EULER, RotTypes.RVEC), filtered_pose[:3], self.target_pose_marker_length*self.det.AXIS_LENGTH, self.det.AXIS_THICKNESS)
 			self.get_logger().info(f"Filtered target pose translation: {filtered_pose[:3]}, rotation (extr. xyz euler): {filtered_pose[3:]}")
 		
 		return filtered_pose
@@ -816,9 +890,15 @@ class CameraPoseDetect(DetectBase):
 
 			# process detection
 			if marker_det is not None and det_img is not None:
+				
 				if self.camera_pose is None:
 					# task: estimate cam pose
-					(res, emphasize_marker_ids) = self.estimateCameraPose(det_img, marker_det)
+					camera_marker_det = {k: v for k, v in marker_det.items() if k in self.marker_poses_ids} # TODO: fix this permanently
+					(res, emphasize_marker_ids) = self.estimateCameraPose(det_img, camera_marker_det)
+					 # optionally adapt detector to new tag size
+					if res and self.target_pose_marker_length != self.cam_pose_marker_length:
+						self.createDetector(self.target_pose_marker_length)
+				
 				elif self.target_marker_poses:
 					# task: compute target poses
 					(res, target_name, emphasize_marker_ids) = self.estimateTargetPose(det_img, marker_det)
@@ -854,6 +934,7 @@ class CameraPoseDetect(DetectBase):
 		except Exception as e:
 			self.get_logger().error(f"Error occurred in run: {e}")
 			rclpy.shutdown()
+			raise e
 
 def main():
 	rclpy.init()

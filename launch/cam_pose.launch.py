@@ -92,7 +92,9 @@ def launch_setup(context, *args, **kwargs):
 				'camera_info_topic': camera_info_topic,
 				'camera_marker_poses_file': LaunchConfiguration('camera_marker_poses_file'),
 				'use_reconfigure': LaunchConfiguration('use_reconfigure'),
-				'marker_length': LaunchConfiguration('marker_length'),
+				'marker_family': LaunchConfiguration('marker_family'),
+				'cam_pose_marker_length': LaunchConfiguration('cam_pose_marker_length'),
+				'target_pose_marker_length': LaunchConfiguration('target_pose_marker_length'),
 				'vis': LaunchConfiguration('vis'),
 				'test': LaunchConfiguration('test'),
 				'cv_window': LaunchConfiguration('cv_window'),
@@ -193,9 +195,20 @@ def generate_launch_description():
 			),
 			# detector params
 			DeclareLaunchArgument(
-				"marker_length",
-				default_value="0.015",
+				"marker_family",
+				default_value="tag16h5",
+				description='',
+				choices=['tag16h5', 'tag25h9', 'tag36h11', 'tagCircle21h7', 'tagCircle49h12', 'tagCustom48h12', 'tagStandard41h12', 'tagStandard52h13']
+			),
+			DeclareLaunchArgument(
+				"cam_pose_marker_length",
+				default_value="0.03",
 				description=''
+			),
+			DeclareLaunchArgument(
+				"target_pose_marker_length",
+				default_value="-1.0",
+				description='If < 0.0, marker length is assumed to be equal to "cam_pose_marker_length".'
 			),
 			DeclareLaunchArgument(
 				'cartesian_bounds_low',
@@ -266,7 +279,7 @@ def generate_launch_description():
 			) , 
 			DeclareLaunchArgument(
 				"depth_fps",
-				default_value="30.0",
+				default_value="30",
 				description=''
 			),
 			DeclareLaunchArgument(
@@ -286,7 +299,7 @@ def generate_launch_description():
 			),
 			DeclareLaunchArgument(
 				"color_fps",
-				default_value="30.0",
+				default_value="30",
 				description=''
 			),
 			DeclareLaunchArgument(
@@ -296,7 +309,7 @@ def generate_launch_description():
 			),
 			DeclareLaunchArgument(
 				"clip_distance",
-				default_value="-2",
+				default_value="-2.0",
 				description=''
 			),
 			DeclareLaunchArgument(

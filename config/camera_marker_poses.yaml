@@ -1,3 +1,8 @@
+PI: &PI 3.14159265359 
+N_PI: &N_PI -3.14159265359 
+PI_2: &PI_2 1.57079632679
+N_PI_2: &N_PI_2 -1.57079632679
+
 # global CS origin
 # applies only to 'camera_pose_marker'
 root:
@@ -15,16 +20,20 @@ camera_pose:
 # required if camera_pose is null
 camera_pose_marker:
   0:
-    rpy: &euler [0, 0, 0]
-    xyz: [0.520, 0, 0.240]
+    rpy: &euler [*N_PI_2, 0, *PI_2]
+    xyz: [0.550, 0.020, 0.327]
 
   1:
     rpy: *euler
-    xyz: [0.550, 0.030, 0.340]
+    xyz: [0.550, -0.020, 0.327]
 
   2:
     rpy: *euler
-    xyz: [0.550, -0.030, 0.340]
+    xyz: [0.520, 0.0, 0.250]
+
+  3:
+    rpy: *euler
+    xyz: [0.520, 0.0, 0.210]
 
 # marker transformation results wrt. root using the known camera pose 
 # the entries are used to transform the marker pose results into a target frame
@@ -32,19 +41,19 @@ camera_pose_marker:
 # the 'root' transformation is not applicable here, use absolute values
 target-1_marker:
   10:
-    rpy: &euler_target1 [0, 0, 0]
-    xyz: [0, 0, 0]
+    rpy: &euler_target1 [*N_PI_2, *PI_2, 0]
+    xyz: [0.010, 0.033, 0.0325]
 
   11:
     rpy: *euler_target1
-    xyz: [0, 0, 0]
+    xyz: [-0.010, 0.033, 0.0325]
 
 # 2nd target
 target-2_marker:
   20:
-    rpy: &euler_target2 [0, 0, 0]
-    xyz: [0, 0, 0]
+    rpy: &euler_target2 [*N_PI_2, *PI_2, 0]
+    xyz: [0.010, 0.033, 0.0325]
 
   21:
     rpy: *euler_target2
-    xyz: [0, 0, 0]
+    xyz: [-0.010, 0.033, 0.0325]
