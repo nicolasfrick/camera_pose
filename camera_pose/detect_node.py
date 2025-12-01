@@ -336,6 +336,8 @@ class CameraPoseDetect(DetectBase):
 		self.declare_parameter('cartesian_bounds_high', 3*[np.pi])
 		self.declare_parameter('rotational_bounds_high', 3*[np.pi])
 		self.declare_parameter('camera_marker_poses_file', '')
+		self.declare_parameter('results_path', '')
+		self.declare_parameter('result_images_path', '')
 
 		# estimation params
 		self.err_term = self.get_parameter('err_term').get_parameter_value().double_value
@@ -349,6 +351,10 @@ class CameraPoseDetect(DetectBase):
 		rotational_upper_bounds = self.get_parameter('rotational_bounds_high').get_parameter_value().double_array_value.tolist()
 		self.lower_bounds = np.array(cartesian_lower_bounds + rotational_lower_bounds, dtype=np.float32)
 		self.upper_bounds = np.array(cartesian_upper_bounds + rotational_upper_bounds, dtype=np.float32)
+		# results
+		self.results_path = self.get_parameter('results_path').get_parameter_value().string_value
+		self.result_file = os.path.join(self.results_path, 'results.yaml') if self.results_path != '' else ''
+		self.img_result_path = self.get_parameter('result_images_path').get_parameter_value().string_value
 
 		self.err = np.inf
 		self.init = False
@@ -358,8 +364,6 @@ class CameraPoseDetect(DetectBase):
 		self.inv_camera_pose = None
 		self.est_camera_pose = np.zeros(6)
 		self.target_poses = {}
-		self.result_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'results/results.yaml')
-		self.img_result_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'images')
 
 		self.print_dbg()
 
@@ -406,7 +410,7 @@ class CameraPoseDetect(DetectBase):
 		return pose2Matrix(self.inv_camera_pose[:3], self.inv_camera_pose[3:], RotTypes.EULER) if self.inv_camera_pose is not None else None
 	
 	def print_dbg(self) -> None:
-		dbg_msg = f"camera_ns='{self.camera_ns}'" \
+		dbg_msg = f"\ncamera_ns='{self.camera_ns}'" \
 				  + f"\nimage_topic='{self.image_topic}'" \
 				  + f"\ncamera_info_topic='{self.camera_info_topic}'" \
 				  + f"\nvis={self.vis}" \
@@ -427,9 +431,10 @@ class CameraPoseDetect(DetectBase):
 				  + f"\ncamera_marker_poses_file={self.camera_marker_poses_file}" \
 				  + f"\nlower_bounds={self.lower_bounds}" \
 				  + f"\nupper_bounds={self.upper_bounds}" \
-				  + f"\nresult_file={self.result_file}"
+				  + f"\nresult_file={self.result_file}" \
+				  + f"\n\n"
 		
-		self.get_logger().debug(dbg_msg)
+		self.get_logger().info(dbg_msg)
 
 	def load_pose_config(self) -> None:
 		# check root pose
@@ -487,8 +492,9 @@ class CameraPoseDetect(DetectBase):
 		# target poses
 		result['target_poses'] = self.target_poses
 
-		with open(self.result_file, 'w') as fw:
-			yaml.dump(result, fw)
+		if self.result_file != '':
+			with open(self.result_file, 'w') as fw:
+				yaml.dump(result, fw)
 
 	def putTextToCorner(self, 
 					    id: int,
@@ -861,7 +867,7 @@ class CameraPoseDetect(DetectBase):
 				return success, "", target_ids 
 		
 		# check error thershold
-		mean_error = round(np.mean(err, 3))
+		mean_error = round(np.mean(err), 3)
 		if mean_error <= self.err_term:
 			success = True
 			result['mean_reprojection_error'] = mean_error
@@ -894,8 +900,10 @@ class CameraPoseDetect(DetectBase):
 				if self.camera_pose is None:
 					# task: estimate cam pose
 					self.get_logger().info("No camera pose is present. Running camera pose estimation.", throttle_duration_sec=2)
+					
 					camera_marker_det = {k: v for k, v in marker_det.items() if k in self.marker_poses_ids} # TODO: fix this permanently
 					(res, emphasize_marker_ids) = self.estimateCameraPose(det_img, camera_marker_det)
+					
 					#  optionally adapt detector to new tag size
 					if res and self.target_pose_marker_length != self.cam_pose_marker_length:
 						self.createDetector(self.target_pose_marker_length)
@@ -921,12 +929,12 @@ class CameraPoseDetect(DetectBase):
 						self.labelDetection(det_img, id, det['ftrans'], det['frot'], emphasize_marker_ids=emphasize_marker_ids)
 					
 					# save result images
-					if res:
+					if res and self.img_result_path != '':
 						cv2.imwrite(os.path.join(self.img_result_path, f"{target_name if target_name else 'camera_pose'}_estimation.jpg"), det_img)
 					
 					# show result
 					if self.vis:
-						self.show_images(det_img, None, None, 100000 if self.success else 1)
+						self.show_images(det_img, None, None, 100000 if self.success else 10000 if res else 1)
 
 			# terminate after showing result
 			if self.success:

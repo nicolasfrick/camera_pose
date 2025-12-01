@@ -22,11 +22,15 @@ def launch_setup(context, *args, **kwargs):
 	image_topic = LaunchConfiguration('image_topic').perform(context) if not markers_camera_name and not bagfile else f'/{markers_camera_name if markers_camera_name else "camera"}/camera/color/image_raw'
 	camera_info_topic = LaunchConfiguration('camera_info_topic').perform(context) if not markers_camera_name and not bagfile else f'/{markers_camera_name if markers_camera_name else "camera"}/camera/color/camera_info'
 	serial_no = LaunchConfiguration('serial_no', default='').perform(context)
+	fps = LaunchConfiguration('fps', default='15.0').perform(context)
+	fps = float(fps) if fps.replace(".", "").replace("-", "").isdigit() else 15.0
+	f_ctrl = LaunchConfiguration('f_ctrl', default='').perform(context)
+	f_ctrl = float(f_ctrl) if f_ctrl != '' and f_ctrl.replace(".", "").replace("-", "").isdigit() else 2*fps
 
 	# realsense
 	if markers_camera_name != "" and bagfile == "":
-		depth_profile = f"{LaunchConfiguration('depth_width').perform(context)}x{LaunchConfiguration('depth_height').perform(context)}x{LaunchConfiguration('depth_fps').perform(context)}"
-		color_profile = f"{LaunchConfiguration('color_width').perform(context)}x{LaunchConfiguration('color_height').perform(context)}x{LaunchConfiguration('color_fps').perform(context)}"
+		depth_profile = f"{LaunchConfiguration('depth_width').perform(context)}x{LaunchConfiguration('depth_height').perform(context)}x{int(fps)}"
+		color_profile = f"{LaunchConfiguration('color_width').perform(context)}x{LaunchConfiguration('color_height').perform(context)}x{int(fps)}"
 		
 		start_setup.append( 
 			IncludeLaunchDescription(
@@ -102,7 +106,7 @@ def launch_setup(context, *args, **kwargs):
 				'flip_outliers': LaunchConfiguration('flip_outliers'),
 				'filter_type': LaunchConfiguration('filter_type'),
 				'filter_iters': LaunchConfiguration('filter_iters'),
-				'f_ctrl': LaunchConfiguration('f_ctrl'),
+				'f_ctrl': f_ctrl,
 				'debug': debug,
 				'fps': LaunchConfiguration('fps'),
 				'err_term': LaunchConfiguration('err_term'),
@@ -110,6 +114,8 @@ def launch_setup(context, *args, **kwargs):
 				'rotational_bounds_low': LaunchConfiguration('rotational_bounds_low',),
 				'cartesian_bounds_high': LaunchConfiguration('cartesian_bounds_high',),
 				'rotational_bounds_high': LaunchConfiguration('rotational_bounds_high',),
+				'results_path': LaunchConfiguration('results_path',),
+				'result_images_path': LaunchConfiguration('result_images_path',),
 			}],
 			arguments=['camera_pose' if not debug_vis else ''],
 			ros_arguments=['--log-level', 'debug' if debug else 'info'],
@@ -145,12 +151,12 @@ def generate_launch_description():
 			),
 			DeclareLaunchArgument(
 				"fps",
-				default_value="30.0",
+				default_value="15.0",
 				description=''
 			),
 			DeclareLaunchArgument(
 				"f_ctrl",
-				default_value="60.0",
+				default_value="",
 				description=''
 			) ,
 			DeclareLaunchArgument(
@@ -256,6 +262,16 @@ def generate_launch_description():
 				default_value="",
 				description='Path to a rosbag to playback.'
 			),
+			DeclareLaunchArgument(
+				"results_path",
+				default_value="",
+				description=''
+			),
+			DeclareLaunchArgument(
+				"result_images_path",
+				default_value="",
+				description=''
+			),
 			# rs params
 			DeclareLaunchArgument(
 				"serial_no",
@@ -278,11 +294,6 @@ def generate_launch_description():
 				description=''
 			) , 
 			DeclareLaunchArgument(
-				"depth_fps",
-				default_value="30",
-				description=''
-			),
-			DeclareLaunchArgument(
 				"enable_color",
 				default_value="true",
 				description=''
@@ -295,11 +306,6 @@ def generate_launch_description():
 			DeclareLaunchArgument(
 				"color_height",
 				default_value="1080",
-				description=''
-			),
-			DeclareLaunchArgument(
-				"color_fps",
-				default_value="30",
 				description=''
 			),
 			DeclareLaunchArgument(
