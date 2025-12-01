@@ -5,7 +5,7 @@ import numpy as np
 
 from enum import Enum
 from cv2 import Rodrigues
-from typing import Tuple, Union
+from typing import Tuple, Union, Callable
 from scipy.spatial.transform import Rotation as R
 
 class RotTypes(Enum):
@@ -26,6 +26,11 @@ NORMAL_IDX_MAP = {NormalTypes.XY: 2,
 				  NormalTypes.XZ: 1,
 				  NormalTypes.YZ: 0,
 				  }
+
+logger = print
+def set_logger(logger_fn: Callable) -> None:
+	global logger
+	logger = logger_fn
 
 def parseIntTuple(value: str) -> Union[None, Tuple]:
 	if not ',' in value:
@@ -50,7 +55,7 @@ def getRotation(rot: np.ndarray, rot_type: RotTypes, out_type: RotTypes) -> np.n
 	elif rot_type == RotTypes.EULER:
 		# gimble lock?
 		if np.abs(np.abs(rot[1]) - np.pi*0.5) < 1e-6:
-			print("Incoming gimble lock detected")
+			logger("Incoming gimble lock detected")
 		mat = R.from_euler('xyz', rot).as_matrix()
 	elif rot_type == RotTypes.QUAT:
 		# x y z w
@@ -70,7 +75,7 @@ def getRotation(rot: np.ndarray, rot_type: RotTypes, out_type: RotTypes) -> np.n
 		res = res.flatten()
 		# gimble lock?
 		if np.abs(np.abs(res[1]) - np.pi*0.5) < 1e-6:
-			print("Outgoing gimble lock detected")
+			logger("Outgoing gimble lock detected")
 	elif out_type == RotTypes.QUAT:
 		res = R.from_matrix(mat).as_quat()
 	elif out_type == RotTypes.MAT:

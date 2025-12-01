@@ -53,6 +53,9 @@ class DetectBase(Node):
 		
 		super().__init__('camera_pose')
 
+		# set util logger
+		set_logger(self.get_logger().warning)
+
 		self.declare_parameter('camera_ns', '')
 		self.declare_parameter('image_topic', 'image_raw')
 		self.declare_parameter('camera_info_topic', 'camera_info')
@@ -94,7 +97,7 @@ class DetectBase(Node):
 		self.filter_type = self.get_parameter('filter_type').get_parameter_value().string_value
 		self.filter_iters = self.get_parameter('filter_iters').get_parameter_value().integer_value
 		self.filter_iters = self.filter_iters if (self.filter_type != 'none' and self.filter_iters > 0) else 1
-		if self.target_pose_marker_length < 0.0:
+		if self.target_pose_marker_length <= 0.0:
 			self.target_pose_marker_length = self.cam_pose_marker_length
 
 		self.det = None
@@ -479,7 +482,7 @@ class CameraPoseDetect(DetectBase):
 		result = {}
 
 		# origin
-		result['root'] = {'xyz': self.root_pose[:3], 'rpy': self.root_pose[3:]}
+		result['root'] = {'xyz': self.root_pose['xyz'], 'rpy': self.root_pose['rpy']}
 
 		# camera pose
 		result['camera_pose'] = {}
@@ -578,12 +581,18 @@ class CameraPoseDetect(DetectBase):
 		error = np.linalg.norm(det_corners - proj_corners, axis=1)
 		return np.mean(error)
 	
-	def projectSingleMarkerCameraFrame(self, detection: dict, id: int, T_world_marker: np.ndarray, img: Optional[Union[None, cv2.typing.MatLike]]=None, emphasize: Optional[bool]=False) -> float:
-		# compute tag corners wrt world frame
-		world_corners = self.tagWorldCorners(T_world_marker, self.det.square_points)
+	def projectSingleMarkerCameraFrame(self, 
+									   detection: dict, 
+									   id: int, 
+									   T_camera_marker: np.ndarray, 
+									   img: Optional[Union[None, cv2.typing.MatLike]]=None, 
+									   emphasize: Optional[bool]=False,
+									   ) -> float:
+		# compute tag corners wrt camera frame
+		cam_corners = self.tagWorldCorners(T_camera_marker, self.det.square_points)
 
 		# project to image
-		projected_corners, _ = cv2.projectPoints(world_corners, np.zeros(3), np.zeros(3), self.det.cmx, self.det.dist)
+		projected_corners, _ = cv2.projectPoints(cam_corners, T_camera_marker[:3, :3], T_camera_marker[:3, 3], self.det.cmx, self.det.dist)
 		projected_corners = np.int32(projected_corners).reshape(-1, 2)
 
 		# draw
@@ -593,16 +602,25 @@ class CameraPoseDetect(DetectBase):
 		
 		return self.reprojectionError(detection['corners'], projected_corners)
 	
-	def projectSingleMarkerWorldFrame(self, detection:dict, id: int, camera_pose: np.ndarray, img: Optional[Union[None, cv2.typing.MatLike]]=None, emphasize: Optional[bool]=False) -> float:
+	def projectSingleMarkerWorldFrame(self, 
+								   	  detection:dict, 
+									  id: int, 
+									  camera_pose: np.ndarray, 
+									  img: Optional[Union[None, cv2.typing.MatLike]]=None, 
+									  emphasize: Optional[bool]=False,
+									  ) -> float:
 		# tf marker corners wrt. world
 		T_world_marker = self.getWorldMarkerTF(id)
 		world_corners = self.tagWorldCorners(T_world_marker, self.det.square_points)
+		
 		# project corners to image plane
 		projected_corners, _ = cv2.projectPoints(world_corners, camera_pose[:3, :3], camera_pose[:3, 3], self.det.cmx, self.det.dist)
 		projected_corners = np.int32(projected_corners).reshape(-1, 2)
+		
 		if img is not None:
 			cv2.polylines(img, [projected_corners], isClosed=True, color=self.det.BLUE if emphasize else self.det.RED, thickness=2 if emphasize else 1)
 			cv2.putText(img, str(id), (projected_corners[0][0]+5, projected_corners[0][1]+5), cv2.FONT_HERSHEY_SIMPLEX, self.FONT_SCALE if emphasize else self.FONT_SCALE/2, self.det.BLACK if emphasize else self.det.WHITE, self.FONT_THCKNS, cv2.LINE_AA)
+		
 		return self.reprojectionError(detection['corners'], projected_corners)
 	
 	def projectMarkersWorldFrame(self, detection:dict, camera_pose: np.ndarray, img: cv2.typing.MatLike=None, emphasize_marker_ids: Optional[List[int]]=[]) -> list:
@@ -820,16 +838,14 @@ class CameraPoseDetect(DetectBase):
 			filtered_pose[:3] = filter.est_translation
 			filtered_pose[3:] = filter.est_rotation_as_euler
 			self.labelDetection(img, -2, filtered_pose[:3], filtered_pose[3:])
-			cv2.drawFrameAxes(img, self.det.cmx, self.det.dist, getRotation(filtered_pose[3:], RotTypes.EULER, RotTypes.RVEC), filtered_pose[:3], self.target_pose_marker_length*self.det.AXIS_LENGTH, self.det.AXIS_THICKNESS)
+			cv2.drawFrameAxes(img, self.det.cmx, self.det.dist, getRotation(filtered_pose[3:], RotTypes.EULER, RotTypes.RVEC), filtered_pose[:3], self.target_pose_marker_length*self.det.AXIS_LENGTH, self.det.AXIS_THICKNESS*5)
 			self.get_logger().info(f"Filtered target pose translation: {filtered_pose[:3]}, rotation (extr. xyz euler): {filtered_pose[3:]}")
 		
 		return filtered_pose
 	
 	def estimateTargetPose(self, det_img: cv2.typing.MatLike, marker_det: dict) -> Tuple[bool, str, list]:
-		err = []
 		result = {}
 		target_poses = []
-		success = False
 
 		# marker to target tf
 		target_key = list(self.target_marker_poses.keys())[0]
@@ -837,50 +853,46 @@ class CameraPoseDetect(DetectBase):
 		target_ids = list(target_vals.keys())
 		# camera extrinsics
 		T_world_camera = self.cam_tf_matrix
+		assert T_world_camera is not None # the camera tf is required
 
 		for id, pose in target_vals.items():
 			result[id] = {}
 			det = marker_det.get(id)
-			
+
 			if det is not None:
+				self.get_logger().debug(f"\nComputing target pose for {id} with\ntranslation: {det['ftrans']}\nrotation: {det['frot']}")
+
 				# compute tag pose wrt camera frame
 				T_camera_marker = pose2Matrix(det['ftrans'], det['frot'], RotTypes.EULER)
 				T_world_marker_est = T_world_camera @ T_camera_marker
 				result[id]['marker_xyz'] = T_world_marker_est[:3, 3]
 				result[id]['marker_rpy'] = getRotation(T_world_marker_est[:3, :3], RotTypes.MAT, RotTypes.EULER)
 
+				self.get_logger().debug(f"World marker pose is\nntranslation: {result[id]['marker_xyz']}\nrotation: {result[id]['marker_rpy']}")
+
 				# transform into target frame
 				if pose is not None:
 					T_marker_target = pose2Matrix(pose['xyz'], pose['rpy'], RotTypes.EULER)
 					T_world_target_est = T_world_marker_est @ T_marker_target
-					result[id]['target_xyz'] = T_world_target_est[:3, 3]
-					result[id]['target_rpy'] = getRotation(T_world_target_est[:3, :3], RotTypes.MAT, RotTypes.EULER)
-					target_poses.append(T_world_target_est)
-				
-				# get reprojection error
-				e = self.projectSingleMarkerCameraFrame(det, id, T_world_marker_est, det_img, True)
-				result[id]['reprojection_error'] = e
-				err.append(e)
+					trans = T_world_target_est[:3, 3]
+					rot = getRotation(T_world_target_est[:3, :3], RotTypes.MAT, RotTypes.EULER)
+					result[id]['target_xyz'] = trans
+					result[id]['target_rpy'] = rot
+					target_poses.append(np.append(trans, rot))
+					self.get_logger().debug(f"World target pose {id}\nntranslation: {trans}\nrotation: {rot}")
 			
 			else:
 				self.get_logger().warning(f"Cannot find marker {id} in pose detection for target {target_key}, aborting!")
-				return success, "", target_ids 
+				return False, "", target_ids 
 		
-		# check error thershold
-		mean_error = round(np.mean(err), 3)
-		if mean_error <= self.err_term:
-			success = True
-			result['mean_reprojection_error'] = mean_error
-			# remove target
-			self.get_logger().info(f"All marker poses for target {target_key} computed with reprojection error {mean_error}, removing target ...")
-			self.target_marker_poses.pop(target_key)
-			# filter target pose
-			result['filtered_target_pose'] = self.estimateTargetPoseFL(det_img, target_poses)
-			self.target_poses[target_key] = result
-		else:
-			self.get_logger().info(f"Reprojection error {mean_error} for target {target_key} exceeds threshold {self.err_term}, continuing detection ...")
+		# filter target pose
+		result['filtered_target_pose'] = self.estimateTargetPoseFL(det_img, target_poses)
+		self.target_poses[target_key] = result
+		# remove target
+		self.get_logger().info(f"All marker poses for target {target_key} computed, removing target ...")
+		self.target_marker_poses.pop(target_key)
 
-		return success, target_key if success else "", target_ids 
+		return True, target_key, target_ids 
 
 	def run(self) -> None:
 		try:
@@ -900,17 +912,15 @@ class CameraPoseDetect(DetectBase):
 				if self.camera_pose is None:
 					# task: estimate cam pose
 					self.get_logger().info("No camera pose is present. Running camera pose estimation.", throttle_duration_sec=2)
-					
 					camera_marker_det = {k: v for k, v in marker_det.items() if k in self.marker_poses_ids} # TODO: fix this permanently
 					(res, emphasize_marker_ids) = self.estimateCameraPose(det_img, camera_marker_det)
-					
-					#  optionally adapt detector to new tag size
-					if res and self.target_pose_marker_length != self.cam_pose_marker_length:
-						self.createDetector(self.target_pose_marker_length)
 				
 				elif self.target_marker_poses:
 					# task: compute target poses
 					self.get_logger().info("A camera pose is present. Running target transformation.", throttle_duration_sec=2)
+					if self.det.marker_length != self.target_pose_marker_length:
+						self.createDetector(self.target_pose_marker_length)
+						self.get_logger().info("Adapted detector params to target marker length!")
 					(res, target_name, emphasize_marker_ids) = self.estimateTargetPose(det_img, marker_det)
 			
 			# set the result if all tasks are complete
@@ -939,6 +949,7 @@ class CameraPoseDetect(DetectBase):
 			# terminate after showing result
 			if self.success:
 				self.get_logger().info("All tasks done. Terminating ...")
+				self.timer.cancel()
 				rclpy.shutdown()
 
 		except Exception as e:
