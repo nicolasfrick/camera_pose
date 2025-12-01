@@ -256,7 +256,7 @@ class DetectBase(Node):
 			if raw_img is not None:
 				self.get_logger().debug("Processing frame {}".format(self.frame_cnt))
 				(marker_det, det_img, proc_img) = self.det.detMarkerPoses(raw_img.copy(), vis=(vis if (i >= self.filter_iters-1 and self.vis) else False))
-
+		
 		self.get_logger().debug(f"Found {len(marker_det) if marker_det else 0} markers in the {'test' if self.test else 'live'} image, in frame {self.frame_cnt}. images present: det_img={det_img is not None}, proc_img={proc_img is not None}, raw_img={raw_img is not None}")
 
 		# align rotations by consens
@@ -445,7 +445,7 @@ class CameraPoseDetect(DetectBase):
 		self.camera_pose = self.camera_marker_poses_config['camera_pose']
 		if self.camera_pose.get('xyz') is None or self.camera_pose.get('rpy') is None:
 			self.camera_pose = None
-			self.get_logger().info("No camera pose is given. Running camera pose estimation.")
+			self.get_logger().info("No camera pose found in configuration.")
 
 		# check marker poses
 		self.marker_poses = self.camera_marker_poses_config['camera_pose_marker']
@@ -893,14 +893,16 @@ class CameraPoseDetect(DetectBase):
 				
 				if self.camera_pose is None:
 					# task: estimate cam pose
+					self.get_logger().info("No camera pose is present. Running camera pose estimation.", throttle_duration_sec=2)
 					camera_marker_det = {k: v for k, v in marker_det.items() if k in self.marker_poses_ids} # TODO: fix this permanently
 					(res, emphasize_marker_ids) = self.estimateCameraPose(det_img, camera_marker_det)
-					 # optionally adapt detector to new tag size
+					#  optionally adapt detector to new tag size
 					if res and self.target_pose_marker_length != self.cam_pose_marker_length:
 						self.createDetector(self.target_pose_marker_length)
 				
 				elif self.target_marker_poses:
 					# task: compute target poses
+					self.get_logger().info("A camera pose is present. Running target transformation.", throttle_duration_sec=2)
 					(res, target_name, emphasize_marker_ids) = self.estimateTargetPose(det_img, marker_det)
 			
 			# set the result if all tasks are complete

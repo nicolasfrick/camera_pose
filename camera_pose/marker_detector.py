@@ -139,13 +139,19 @@ class MarkerDetectorBase():
 	def getFilteredTranslationById(self, id: int) -> Union[np.ndarray, None]:
 		f = self.filters.get(id)
 		if f is not None:
+			if all([t==0.0 for t in f.est_translation]):
+				self.log_warning(f"Zero translation from filter for id {id}")
 			return f.est_translation
+		self.log_error(f"Requesting non-present filter for id {id}!")
 		return None
 	
 	def getFilteredRotationEulerById(self, id: int) -> Union[np.ndarray, None]:
 		f = self.filters.get(id)
 		if f is not None:
+			if all([r==0.0 for r in f.est_rotation_as_euler]):
+				self.log_warning(f"Zero rotation from filter for id {id}")
 			return f.est_rotation_as_euler
+		self.log_error(f"Requesting non-present filter for id {id}!")
 		return None
 	
 	def resetFilters(self) -> None:
@@ -359,22 +365,26 @@ class AprilDetector(MarkerDetectorBase):
 						self.filters[id].updateFilter(PoseFilterBase.poseToMeasurement(tvec=tvec, rot=rot_mat, rot_t=RotTypes.MAT))
 					else:
 						# new filter
-						self.filters.update( {id: createFilter(self.filter_type, 
-																							PoseFilterBase.poseToMeasurement(tvec=tvec, rot=rot_mat, rot_t=RotTypes.MAT),
-																							dt_kalman=self.dt, # applies only for kalman filter
-																							process_noise_kalman=self.params.kf_params.process_noise, # applies only for kalman filter
-																							measurement_noise_kalman=self.params.kf_params.measurement_noise, # applies only for kalman filter 
-																							error_post_kalman=self.params.kf_params.error_post)} ) # applies only for kalman filter
+						self.filters.update({id: createFilter(self.filter_type, 
+															  PoseFilterBase.poseToMeasurement(tvec=tvec, rot=rot_mat, rot_t=RotTypes.MAT),
+															  dt_kalman=self.dt, # applies only for kalman filter
+															  process_noise_kalman=self.params.kf_params.process_noise, # applies only for kalman filter
+															  measurement_noise_kalman=self.params.kf_params.measurement_noise, # applies only for kalman filter 
+															  error_post_kalman=self.params.kf_params.error_post, # applies only for kalman filter
+															  )
+											}) 
 					# result
 					marker_poses.update({id: {'rvec': cv2.Rodrigues(rot_mat)[0].flatten(), 
-							   											'rot_mat': rot_mat,
-							   											'tvec': tvec, 
-																		'points': self.obj_points, 
-																		'corners': detection.corners.astype(int), 
-																		'ftrans': self.getFilteredTranslationById(id), 
-																		'frot': self.getFilteredRotationEulerById(id),
-																		'center': detection.center,
-																		'pose_err': detection.pose_err}})
+							   			      'rot_mat': rot_mat,
+							   			      'tvec': tvec, 
+										      'points': self.obj_points, 
+										      'corners': detection.corners.astype(int), 
+										      'ftrans': self.getFilteredTranslationById(id), 
+										      'frot': self.getFilteredRotationEulerById(id),
+										      'center': detection.center,
+										      'pose_err': detection.pose_err,
+											  }
+										})
 					if vis:
 						self._drawMarkers(id, detection.corners.astype(int), img)
 				elif vis:

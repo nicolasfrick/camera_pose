@@ -237,7 +237,7 @@ def generate_launch_description():
 			),
 			DeclareLaunchArgument(
 				"filter_type",
-				default_value="none",
+				default_value="median",
 				description="Filter marker pose detections.",
 				choices=['none', 'mean', 'median', 'kalman_simple', 'kalman'],
 			),

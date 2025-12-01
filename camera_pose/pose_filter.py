@@ -89,7 +89,7 @@ class PoseFilterMean(PoseFilterBase):
 				use_median: Optional[bool]=False) -> None:
 		super().__init__(state_init)
 		self.use_median = use_median
-		self.filter = pd.DataFrame(np.array([state_init]),columns=self.COLS, dtype=pd.Float32Dtype)
+		self.filter = pd.DataFrame(np.array([state_init], dtype=np.float32),columns=self.COLS)
 
 	def updateFilter(self, measurement: np.ndarray) -> Tuple[np.ndarray]:
 		"""Process filter
@@ -302,7 +302,8 @@ def createFilter(filter_type: Union[FilterTypes, str],
 	ft = filter_type if isinstance(filter_type, FilterTypes) else FILTER_TYPES_MAP[filter_type]
 	if ft in [FilterTypes.MEAN, FilterTypes.MEDIAN]:
 		return PoseFilterMean(state_init=init_state, 
-							use_median=ft==FilterTypes.MEDIAN)  
+							  use_median=ft==FilterTypes.MEDIAN)  
+	
 	elif ft in [FilterTypes.KALMAN, FilterTypes.KALMAN_SIMPLE]:
 		return PoseFilterKalman(dt=dt_kalman, 
 						  		state_init=init_state, 
