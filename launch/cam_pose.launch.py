@@ -196,7 +196,7 @@ def generate_launch_description():
 			) ,
 			DeclareLaunchArgument(
 				"err_term",
-				default_value="5.0",
+				default_value="0.0",
 				description=''
 			),
 			# detector params

@@ -360,6 +360,7 @@ class CameraPoseDetect(DetectBase):
 		self.img_result_path = self.get_parameter('result_images_path').get_parameter_value().string_value
 
 		self.err = np.inf
+		self.last_err = None
 		self.init = False
 		self.success = False
 		self.cam_reprojection_errors = {}
@@ -813,14 +814,15 @@ class CameraPoseDetect(DetectBase):
 		self.get_logger().info("Running estimation")
 		(self.err, self.est_camera_pose) = self.estimateCamPoseLS(det_img, self.err, initial_guess, marker_det)
 
-		if self.err <= self.err_term:
+		if (self.last_err is not None and self.last_err <= self.err) or self.err <= self.err_term:
 			success = True
 			self.camera_pose = self.est_camera_pose
 			tvec_inv, euler_inv = invPersp(tvec=self.camera_pose[:3], rot=self.camera_pose[3:], rot_t=RotTypes.EULER)
 			self.inv_camera_pose = np.array(tvec_inv + euler_inv, dtype=np.float32)
-			self.get_logger().info(f"Camera pose estimation terminated.\nEstimated camera pose xyz (m): {self.camera_pose[:3]},\nextr. xyz Euler angles (rad): {self.camera_pose[3:]},\nmean reprojection error: {round(self.err, 3)}")
+			self.get_logger().info(f"Camera pose estimation terminated by criteria {'error >= last error' if self.last_err <= self.err else 'error < threshold'}.\nEstimated camera pose xyz (m): {self.camera_pose[:3]},\nextr. xyz Euler angles (rad): {self.camera_pose[3:]},\nmean reprojection error: {round(self.err, 3)}")
 		else:
-			self.get_logger().info(f"Camera pose estimation failed, mean reprojection error: {round(self.err, 3)} > threshold: {self.err_term}")
+			self.get_logger().info(f"Camera pose estimation failed, mean reprojection error: {round(self.err, 3)} > threshold: {self.err_term} and error {round(self.err, 3)} < last error {round(self.last_err, 3) if self.last_err is not None else np.inf}")
+			self.last_err = self.err
 
 		return success, list(marker_det.keys())
 	
