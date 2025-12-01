@@ -224,3 +224,17 @@ def loadMarkerConfig() -> dict:
 		config = yaml.safe_load(fr)
 		marker_config = config['marker_config']
 		return marker_config
+
+def to_serializable(value):
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    elif isinstance(value, np.float32):
+        return float(value)
+    elif isinstance(value, np.float64):
+        return float(value)
+    elif isinstance(value, dict):
+        return {k: to_serializable(v) for k, v in value.items()}
+    elif isinstance(value, list):
+        return [to_serializable(i) for i in value]
+    else:
+        return value

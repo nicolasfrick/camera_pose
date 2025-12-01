@@ -490,10 +490,10 @@ class CameraPoseDetect(DetectBase):
 		result['camera_pose']['rpy'] = self.cam_rot_ext_xyz_euler.tolist()
 		result['camera_pose']['quat'] = self.cam_rot_ext_xyz_quat.tolist()
 		result['camera_pose']['mat'] = self.cam_rot_ext_xyz_mat.tolist()
-		result['camera_pose']['reprojection_error'] = round(self.err, 6)
+		result['camera_pose']['reprojection_error'] = round(to_serializable(self.err), 6)
 
 		# target poses
-		result['target_poses'] = self.target_poses
+		result['target_poses'] = to_serializable(self.target_poses)
 
 		if self.result_file != '':
 			with open(self.result_file, 'w') as fw:
@@ -838,7 +838,7 @@ class CameraPoseDetect(DetectBase):
 			filtered_pose[:3] = filter.est_translation
 			filtered_pose[3:] = filter.est_rotation_as_euler
 			self.labelDetection(img, -2, filtered_pose[:3], filtered_pose[3:])
-			cv2.drawFrameAxes(img, self.det.cmx, self.det.dist, getRotation(filtered_pose[3:], RotTypes.EULER, RotTypes.RVEC), filtered_pose[:3], self.target_pose_marker_length*self.det.AXIS_LENGTH, self.det.AXIS_THICKNESS*5)
+			cv2.drawFrameAxes(img, self.det.cmx, self.det.dist, getRotation(filtered_pose[3:], RotTypes.EULER, RotTypes.RVEC), filtered_pose[:3], self.target_pose_marker_length*self.det.AXIS_LENGTH*5, self.det.AXIS_THICKNESS*5)
 			self.get_logger().info(f"Filtered target pose translation: {filtered_pose[:3]}, rotation (extr. xyz euler): {filtered_pose[3:]}")
 		
 		return filtered_pose
