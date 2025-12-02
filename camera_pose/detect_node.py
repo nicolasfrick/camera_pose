@@ -967,6 +967,7 @@ class CameraPoseDetect(DetectBase):
 				self.get_logger().info("All tasks done. Terminating ...")
 				self.timer.cancel()
 				rclpy.shutdown()
+				exit(0)
 
 		except Exception as e:
 			self.get_logger().error(f"Error occurred in run: {e}")
