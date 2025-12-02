@@ -9,6 +9,7 @@ import numpy as np
 
 from rclpy.node import Node
 from cv_bridge import CvBridge
+from rclpy.time import Duration
 from scipy.optimize import least_squares
 from scipy.spatial.transform import Rotation as R
 from sensor_msgs.msg import Image, CameraInfo
@@ -814,19 +815,20 @@ class CameraPoseDetect(DetectBase):
 		self.get_logger().info("Running estimation")
 		(self.err, self.est_camera_pose) = self.estimateCamPoseLS(det_img, self.err, initial_guess, marker_det)
 
-		if (self.last_err is not None and self.last_err <= self.err) or self.err <= self.err_term:
-			success = True
-			self.camera_pose = self.est_camera_pose
-			tvec_inv, euler_inv = invPersp(tvec=self.camera_pose[:3], rot=self.camera_pose[3:], rot_t=RotTypes.EULER)
-			self.inv_camera_pose = np.array(tvec_inv + euler_inv, dtype=np.float32)
-			self.get_logger().info(f"Camera pose estimation terminated by criteria {'error >= last error' if self.last_err <= self.err else 'error < threshold'}.\nEstimated camera pose xyz (m): {self.camera_pose[:3]},\nextr. xyz Euler angles (rad): {self.camera_pose[3:]},\nmean reprojection error: {round(self.err, 3)}")
+		if self.last_err is not None:
+			if self.last_err <= self.err or self.err <= self.err_term:
+				success = True
+				self.camera_pose = self.est_camera_pose
+				tvec_inv, euler_inv = invPersp(tvec=self.camera_pose[:3], rot=self.camera_pose[3:], rot_t=RotTypes.EULER)
+				self.inv_camera_pose = np.append(tvec_inv, euler_inv)
+				self.get_logger().info(f"Camera pose estimation terminated by criteria: {'current error >= last error' if self.last_err <= self.err else 'error < threshold'}.\nEstimated camera pose xyz (m): {self.camera_pose[:3]},\nextr. xyz Euler angles (rad): {self.camera_pose[3:]},\nmean reprojection error: {round(self.err, 3)}")
 		else:
 			self.get_logger().info(f"Camera pose estimation failed, mean reprojection error: {round(self.err, 3)} > threshold: {self.err_term} and error {round(self.err, 3)} < last error {round(self.last_err, 3) if self.last_err is not None else np.inf}")
 			self.last_err = self.err
 
 		return success, list(marker_det.keys())
 	
-	def estimateTargetPoseFL(self, img: cv2.typing.MatLike, target_poses: List[np.ndarray]) -> np.ndarray:
+	def estimateTargetPoseFL(self, target_poses: List[np.ndarray]) -> np.ndarray:
 		filter = None
 		filtered_pose = np.zeros(6)
 		
@@ -839,12 +841,18 @@ class CameraPoseDetect(DetectBase):
 		if filter is not None:
 			filtered_pose[:3] = filter.est_translation
 			filtered_pose[3:] = filter.est_rotation_as_euler
-			self.labelDetection(img, -2, filtered_pose[:3], filtered_pose[3:])
-			cv2.drawFrameAxes(img, self.det.cmx, self.det.dist, getRotation(filtered_pose[3:], RotTypes.EULER, RotTypes.RVEC), filtered_pose[:3], self.target_pose_marker_length*self.det.AXIS_LENGTH*5, self.det.AXIS_THICKNESS*5)
-			self.get_logger().info(f"Filtered target pose translation: {filtered_pose[:3]}, rotation (extr. xyz euler): {filtered_pose[3:]}")
-		
+
 		return filtered_pose
 	
+	def drawTargetPose(self, img: cv2.typing.MatLike, target_world_pose: np.ndarray) -> None:
+		T_world_target = pose2Matrix(target_world_pose[:3], target_world_pose[3:], RotTypes.EULER)
+		T_camera_world = self.inv_cam_tf_matrix
+		assert T_camera_world is not None # the camera tf is required
+		T_camera_target = T_camera_world @ T_world_target
+
+		self.labelDetection(img, -2, target_world_pose[:3], target_world_pose[3:])
+		cv2.drawFrameAxes(img, self.det.cmx, self.det.dist, getRotation(T_camera_target[:3, :3], RotTypes.MAT, RotTypes.RVEC), T_camera_target[:3, 3], self.target_pose_marker_length*self.det.AXIS_LENGTH, self.det.AXIS_THICKNESS)
+
 	def estimateTargetPose(self, det_img: cv2.typing.MatLike, marker_det: dict) -> Tuple[bool, str, list]:
 		result = {}
 		target_poses = []
@@ -888,8 +896,11 @@ class CameraPoseDetect(DetectBase):
 				return False, "", target_ids 
 		
 		# filter target pose
-		result['filtered_target_pose'] = self.estimateTargetPoseFL(det_img, target_poses)
+		filtered_pose = self.estimateTargetPoseFL(target_poses)
+		self.get_logger().info(f"Filtered target pose translation: {filtered_pose[:3]}, rotation (extr. xyz euler): {filtered_pose[3:]}")
+		result['filtered_target_pose'] = {'xyz': filtered_pose[:3], 'rpy': filtered_pose[3:]}
 		self.target_poses[target_key] = result
+		self.drawTargetPose(det_img, filtered_pose)
 		# remove target
 		self.get_logger().info(f"All marker poses for target {target_key} computed, removing target ...")
 		self.target_marker_poses.pop(target_key)
@@ -913,13 +924,13 @@ class CameraPoseDetect(DetectBase):
 				
 				if self.camera_pose is None:
 					# task: estimate cam pose
-					self.get_logger().info("No camera pose is present. Running camera pose estimation.", throttle_duration_sec=2)
+					self.get_logger().info("\n\nNo camera pose is present. Running camera pose estimation.", throttle_duration_sec=2)
 					camera_marker_det = {k: v for k, v in marker_det.items() if k in self.marker_poses_ids} # TODO: fix this permanently
 					(res, emphasize_marker_ids) = self.estimateCameraPose(det_img, camera_marker_det)
 				
 				elif self.target_marker_poses:
 					# task: compute target poses
-					self.get_logger().info("A camera pose is present. Running target transformation.", throttle_duration_sec=2)
+					self.get_logger().info("\n\nA camera pose is present. Running target transformation.", throttle_duration_sec=2)
 					if self.det.marker_length != self.target_pose_marker_length:
 						self.createDetector(self.target_pose_marker_length)
 						self.get_logger().info("Adapted detector params to target marker length!")
@@ -944,9 +955,12 @@ class CameraPoseDetect(DetectBase):
 					if res and self.img_result_path != '':
 						cv2.imwrite(os.path.join(self.img_result_path, f"{target_name if target_name else 'camera_pose'}_estimation.jpg"), det_img)
 					
-					# show result
-					if self.vis:
+				# show result
+				if self.vis:
+					for _ in range(1 if self.cv_window else 10):
 						self.show_images(det_img, None, None, 100000 if self.success else 10000 if res else 1)
+						if not self.cv_window:
+							self.get_clock().sleep_for(Duration(nanoseconds=int(0.250*1e9)))
 
 			# terminate after showing result
 			if self.success:
@@ -956,6 +970,7 @@ class CameraPoseDetect(DetectBase):
 
 		except Exception as e:
 			self.get_logger().error(f"Error occurred in run: {e}")
+			self.timer.cancel()
 			rclpy.shutdown()
 			raise e
 
