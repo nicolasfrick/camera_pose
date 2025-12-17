@@ -55,7 +55,7 @@ If `/usr/bin/colcon` appears, try the build from a new terminal to remove unwant
 
 ## Run
 
-![Initial View](https://raw.githubusercontent.com/nicolasfrick/camera_pose/main/images/initial_view.jpg)
+![Initial View](https://raw.githubusercontent.com/nicolasfrick/camera_pose/main/images/initial_view.png)
 
 ### (1) Camera Pose estimation - Ground Truth Marker Set
 
@@ -145,6 +145,18 @@ During the estimation process, the results are visualized under the ROS topic `/
 
 
 ![Target Pose](https://raw.githubusercontent.com/nicolasfrick/camera_pose/main/images/target-2_marker_estimation.jpg)
+
+### Issues:
+
+- All marker ids must be *unique*
+
+- The marker size must be large enough to avoid resolution issues:
+
+  - place the cameras close as possible to the markers
+  
+  - increase the size of the markers
+  
+- Assure good marker illumination by turning of light sources in front of the camera. Place a light source behind the camera that illuminates the marker directly.
 
 
 ## ToDo
