@@ -54,15 +54,103 @@ Expected output: `$HOME/miniconda3/envs/ros_env/bin/colcon`
 If `/usr/bin/colcon` appears, try the build from a new terminal to remove unwanted environment variables.
 
 ## Run
-Place some markers at a known pose and a realsense camera with the markers visible in its field of view.
+
+![Initial View](https://raw.githubusercontent.com/nicolasfrick/camera_pose/main/images/initial_view.jpg)
+
+### (1) Camera Pose estimation - Ground Truth Marker Set
+
+In the first step, a camera pose is estimated from a set of known marker poses and their observations in the image using a least squares algorithm and a solution to the perspective-n-point problem from the Apriltag library.
+
+Attach one or more markers to an object and enter their translation and rotation with respect to the center of the world coordinate system in the file `config/camera_marker_poses.yaml` under the `camera_pose_marker`key. Translation is required in meter. Rotation is required as radians (extrinsic `xyz` Euler angles). Check the example in the image for the coordinate system representation of an Apriltag marker to determine the marker poses. The Apriltag marker id has to be the key for the relevant marker pose as shown in the example below. 
+
+
+```
+camera_pose_marker:
+  0:                                # Marker id
+    rpy: &euler [*N_PI_2, 0, *PI_2] # roration in rad (extrinsic `xyz` Euler angles)
+    xyz: [0.550, 0.020, 0.327]      # translation in meter
+  1:
+    ...
+```
+
+### (2) Marker Pose Computation - Target Marker Set
+
+Second, the poses of the target markers are computed from their detections. 
+
+Attach one or more markers to an object and enter their ids in the file `config/camera_marker_poses.yaml` under the `target-i_marker`key. `i` refers to the i'th object. The `xyz` and `rpy` keys are supposed to be `null`. Only those marker ids will be respected for the computation.
+
+
+```
+# 1st target
+target-1_marker:
+  10:
+    rpy: null
+    xyz: null
+
+  11:
+    rpy: null
+    xyz: null
+
+# 2nd target
+target-2_marker:
+  ...
+```
+
+Optionally, you may enter the pose of a target frame wrt. to a target marker's coordinate system instead of `null` to compute the pose of the frame wrt. the world frame.
+
+
+```
+# 1st target
+target-1_marker:
+  10:
+    rpy: &euler_target1 [*N_PI_2, *PI_2, 0]
+    xyz: [0.010, 0.033, 0.0325]
+
+  11:
+    rpy: *euler_target1
+    xyz: [-0.010, 0.033, 0.0325]
+
+# 2nd target
+target-2_marker:
+  ...
+```
+
+
+### Run the Script
+
+Run the pose estimation on the test image:
 
 ```
 $ cd $HOME/camera_ws
 $ source install/setup.bash
-$ ros2 launch camera_pose cam_pose.launch.py
+$ ros2 launch camera_pose cam_pose.launch.py cam_pose_marker_length:=0.03 test:=true 
 ```
+
+Required launch arguments: 
+
+    - cam_pose_marker_length: Value (float) of the marker length in meter. 
+                              Marker length refers to the distance between the detection corners as shown in the image. 
+
+Optional launch arguments: 
+
+    - marker_family: Default `tag16h5`.
+
+### Results
+
+The results of the pose estimations are written to the file `results/results.yaml` and contains the camera pose estimate in different representations and the target marker poses with respect to the world coordinate system's center. If a target pose has been specified, the entry `filtered_target_pose` shows an estimate of the target frame's pose.
+
+During the estimation process, the results are visualized under the ROS topic `/camera_pose_detections`.
+
+![Camera Pose](https://raw.githubusercontent.com/nicolasfrick/camera_pose/main/images/camera_pose_estimation.jpg)
+
+
+![Target Pose](https://raw.githubusercontent.com/nicolasfrick/camera_pose/main/images/target-2_marker_estimation.jpg)
+
 
 ## ToDo
 
 EKF filter implementation
+
 RANSAC implementation 
+
+Migrate internal rotation representation
